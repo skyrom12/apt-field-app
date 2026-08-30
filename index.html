@@ -12,7 +12,7 @@
   :root{--brand:#B22234;--navy:#0C1A35;--ink:#0C1A35;--muted:#5A6578;--line:#DFE2E8;--bg:#FAFBF6;--ok:#2e7d32;--warn:#b26a00;--err:#b3261e}
   *{box-sizing:border-box}
   body{margin:0;font:16px/1.45 -apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink)}
-  header{background:var(--navy);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid var(--brand);position:sticky;top:0}
+  header{background:var(--navy);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid var(--brand);position:sticky;top:0;z-index:5}
   header h1{font-size:1.05rem;margin:0}
   header .sub{font-size:.8rem;opacity:.8}
   select,input,textarea,button{font:inherit}
@@ -29,20 +29,43 @@
   .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:10px}
   .card h2{margin:0 0 2px;font-size:1.1rem}
   .card .addr{color:var(--muted);margin-bottom:12px}
-  .svc{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0 14px}
+  .sect{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--brand);border-top:1px solid var(--line);padding-top:14px;margin:16px 0 8px}
+  .svc{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0 6px}
   .svc label{display:flex;gap:8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:.92rem}
-  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
   .field{margin-bottom:12px}
   .field label{display:block;font-size:.82rem;font-weight:600;color:var(--muted);margin-bottom:4px}
   .field input,.field textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px}
   textarea{min-height:64px;resize:vertical}
+  /* segmented buttons */
+  .segrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+  .segrow .sl{font-size:.9rem;font-weight:600}
+  .seg{display:flex;gap:4px}
+  .seg button{min-width:40px;padding:8px 0;border:1px solid var(--line);background:#fff;border-radius:8px;font-weight:700;color:var(--muted);cursor:pointer}
+  .seg button.on{background:var(--navy);border-color:var(--navy);color:#fff}
+  /* chemical steppers */
+  .chem{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px dashed var(--line)}
+  .chem:last-child{border-bottom:0}
+  .chem .cl{flex:1;min-width:0}
+  .chem .cl b{display:block;font-size:.92rem}
+  .chem .cl span{font-size:.78rem;color:var(--muted)}
+  .chem .qtybox{display:flex;align-items:center;gap:4px}
+  .chem .qtybox button{width:38px;height:38px;border-radius:8px;border:1px solid var(--line);background:#fff;font-size:1.2rem;font-weight:700;cursor:pointer;color:var(--navy)}
+  .chem .qty{width:56px;text-align:center;padding:8px 2px;border:1px solid var(--line);border-radius:8px}
+  .chem .lineamt{min-width:60px;text-align:right;font-weight:700;font-size:.9rem;color:var(--muted)}
+  .chem .lineamt.nz{color:var(--ink)}
+  .morechems{width:100%;padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--bg);color:var(--muted);font-weight:600;cursor:pointer;margin-top:6px}
+  .totalbar{position:sticky;bottom:0;background:var(--navy);color:#fff;border-radius:10px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin:12px 0;font-weight:700}
+  .totalbar small{font-weight:400;opacity:.8;display:block;font-size:.75rem}
+  .custchem{display:flex;gap:8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:.92rem;margin-top:10px}
   .btn{width:100%;padding:13px;border:0;border-radius:10px;font-weight:700;cursor:pointer}
   .btn.primary{background:var(--brand);color:#fff}
   .btn.ghost{background:#fff;color:var(--warn);border:1px solid var(--line);margin-top:8px}
   .btn.back{background:#fff;color:var(--muted);border:1px solid var(--line);margin-bottom:10px;width:auto;padding:8px 14px}
   .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:var(--ink);color:#fff;padding:10px 18px;border-radius:99px;font-size:.9rem;opacity:0;transition:opacity .3s;pointer-events:none}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:var(--ink);color:#fff;padding:10px 18px;border-radius:99px;font-size:.9rem;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
   .toast.show{opacity:1}
   .spinner{text-align:center;color:var(--muted);padding:30px 0}
   /* office */
@@ -52,6 +75,11 @@
   .meta{color:var(--muted);font-size:.86rem;margin:2px 0 8px}
   .kv{margin:2px 0;font-size:.92rem}
   .kv b{color:var(--muted);font-weight:600}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+  .chip{font-size:.78rem;border:1px solid var(--line);background:var(--bg);border-radius:99px;padding:3px 10px}
+  .bill{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px;font-size:.95rem;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+  .bill b{font-size:1.05rem}
+  .bill .warn{color:var(--warn);font-size:.8rem}
   .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
   .actions button{padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:600;width:auto}
   .actions button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
@@ -73,6 +101,14 @@ const TECHS = ['Adam','Bradley','Nick','Zack'];
 const SERVICES = ['Skimmed surface','Brushed walls & steps','Vacuumed pool','Emptied baskets',
                   'Tested water','Balanced chemicals','Backwashed filter','Cleaned filter',
                   'Checked equipment'];
+// Chemicals shown up front (the paper form's right-hand column); the rest sit
+// behind "More chemicals". Keys must match the Prices tab in APT Field Ops.
+const COMMON_CHEMS = ['tabs','shock_lb','dichlor_lb','acid_gal','alk_lb','stab_lb','ch_lb','salt_bag'];
+const EQUIPMENT = ['Skimmer(s)','AutoCleaner','FingerScreen','Vacuum','Brush','NetDebris','EnergyFilter','PumpBasket'];
+const READING_FIELDS = [
+  ['ch','Calcium ppm'],['tc','Total Cl ppm'],['fc','Free Cl ppm'],['ph','pH'],
+  ['alk','Alkalinity'],['cya','Stabilizer'],['salt','Salt'],['phos','Phosphates']
+];
 const IS_OFFICE = new URLSearchParams(location.search).get('view') === 'office';
 
 function readStore(k){ try { return localStorage.getItem(k) || ''; } catch(e){ return ''; } }
@@ -80,6 +116,7 @@ function writeStore(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 function $(id){ return document.getElementById(id); }
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function money(n){ return '$' + (Math.round((Number(n)||0)*100)/100).toFixed(2); }
 
 async function api(action, params){
   const res = await fetch(API_URL, {
@@ -93,8 +130,17 @@ async function api(action, params){
 }
 
 /* ---------------- TECH VIEW ---------------- */
-let state = { tech: readStore('apt.tech'), day: defaultDay(), route: [], stop: null, photos: [] };
+let state = { tech: readStore('apt.tech'), day: defaultDay(), route: [], stop: null, photos: [],
+              prices: [], timeIn: null };
 function defaultDay(){ const d = new Date().getDay(); return (d>=1&&d<=5) ? DAYS[d-1] : 'Mon'; }
+
+function loadPrices(){
+  const cached = readStore('apt.prices');
+  if (cached) { try { state.prices = JSON.parse(cached); } catch(e){} }
+  api('getPrices', {})
+    .then(d => { state.prices = d.items || []; writeStore('apt.prices', JSON.stringify(state.prices)); })
+    .catch(()=>{ /* offline: cached prices still work; server reprices anyway */ });
+}
 
 function render(){
   $('hdr').textContent = state.tech ? state.tech + ' · ' + state.day : '';
@@ -131,22 +177,69 @@ function loadRoute(){
 function openStop(order){
   state.stop = state.route.find(s => s.order === order);
   state.photos = [];
+  state.timeIn = new Date().toISOString();   // on-site clock starts when the stop is opened
   render();
+}
+
+function segRow(label, name, opts){
+  return `<div class="segrow"><span class="sl">${label}</span><span class="seg" data-name="${name}">` +
+    opts.map(o=>`<button type="button" data-v="${o}">${o}</button>`).join('') + '</span></div>';
+}
+
+function chemRow(p){
+  return `<div class="chem" data-key="${p.key}" data-price="${p.price}">
+    <div class="cl"><b>${esc(p.label)}</b><span>${p.price ? money(p.price)+' / '+esc(p.unit) : 'per '+esc(p.unit)+' — price not set'}</span></div>
+    <div class="qtybox">
+      <button type="button" onclick="bump(this,-1)">−</button>
+      <input class="qty" inputmode="decimal" value="" placeholder="0" oninput="recalc()">
+      <button type="button" onclick="bump(this,1)">+</button>
+    </div>
+    <div class="lineamt">–</div>
+  </div>`;
 }
 
 function renderForm(){
   const s = state.stop;
+  const common = [], more = [];
+  state.prices.forEach(p => (COMMON_CHEMS.includes(p.key) ? common : more).push(p));
+  common.sort((a,b)=>COMMON_CHEMS.indexOf(a.key)-COMMON_CHEMS.indexOf(b.key));
   $('app').innerHTML = `
     <button class="btn back" onclick="state.stop=null;render()">&larr; Route</button>
     <div class="card">
       <h2>${s.order}. ${esc(s.customer)}</h2><div class="addr">${esc(s.address)}</div>
+
       <div class="svc">${SERVICES.map(x=>`<label><input type="checkbox" value="${x}">${x}</label>`).join('')}</div>
-      <div class="grid3">
-        <div class="field"><label>pH</label><input id="ph" inputmode="decimal"></div>
-        <div class="field"><label>Chlorine ppm</label><input id="cl" inputmode="decimal"></div>
-        <div class="field"><label>Alkalinity</label><input id="alk" inputmode="decimal"></div>
+
+      <div class="sect">Water</div>
+      ${segRow('Level — arrive','arriveLevel',['BS','L','H','P'])}
+      ${segRow('Level — leaving','leftLevel',['L','H','P'])}
+      <div class="grid4">
+        <div class="field"><label>PSI in</label><input id="psiIn" inputmode="decimal"></div>
+        <div class="field"><label>PSI out</label><input id="psiOut" inputmode="decimal"></div>
+        <div class="field"><label>Air °</label><input id="airTemp" inputmode="decimal"></div>
+        <div class="field"><label>Water °</label><input id="waterTemp" inputmode="decimal"></div>
       </div>
-      <div class="field"><label>Chemicals added</label><input id="chem" placeholder="e.g. 2 lb shock, 1 qt algaecide"></div>
+
+      <div class="sect">Water tests</div>
+      <div class="grid4">
+        ${READING_FIELDS.map(([k,l])=>`<div class="field"><label>${l}</label><input id="r_${k}" inputmode="decimal"></div>`).join('')}
+      </div>
+
+      <div class="sect">Chemicals added</div>
+      ${state.prices.length ? '' : '<div class="spinner">Loading price list…</div>'}
+      <div id="chemsCommon">${common.map(chemRow).join('')}</div>
+      ${more.length ? `<button type="button" class="morechems" onclick="this.style.display='none';$('chemsMore').style.display='block'">More chemicals (${more.length}) ▾</button>
+      <div id="chemsMore" style="display:none">${more.map(chemRow).join('')}</div>` : ''}
+      <label class="custchem"><input type="checkbox" id="custChems" onchange="recalc()">Customer's own chemicals — don't bill</label>
+      <div class="totalbar"><span>Chemicals<small id="chemNote">billed to customer on approval</small></span><span id="chemTotal">$0.00</span></div>
+
+      <div class="sect">Equipment condition <span style="font-weight:400;text-transform:none;color:var(--muted)">(E-L-M-H)</span></div>
+      ${EQUIPMENT.map(n=>segRow(n,'eq:'+n,['E','L','M','H'])).join('')}
+      ${segRow('Filters cleaned','filtersCleaned',['Y','N'])}
+      ${segRow('Filter debris','filtersAmount',['L','M','H'])}
+      <div class="field"><label>Repairs / parts needed (office only)</label><textarea id="repairs"></textarea></div>
+
+      <div class="sect">Wrap up</div>
       <div class="field"><label>Note to customer (goes in their email)</label><textarea id="custnote"></textarea></div>
       <div class="field"><label>Internal note (office only)</label><textarea id="intnote"></textarea></div>
       <div class="field"><label>Photos</label>
@@ -156,6 +249,40 @@ function renderForm(){
       <button class="btn ghost" onclick="submitVisit(true)">Unable to service…</button>
     </div>`;
   $('photos').onchange = handlePhotos;
+  document.querySelectorAll('.seg button').forEach(b => {
+    b.onclick = () => {
+      const was = b.classList.contains('on');
+      b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+      if (!was) b.classList.add('on');   // tapping the active one clears it
+    };
+  });
+}
+
+function bump(btn, d){
+  const input = btn.parentElement.querySelector('.qty');
+  const v = Math.max(0, (parseFloat(input.value)||0) + d);
+  input.value = v || '';
+  recalc();
+}
+
+function recalc(){
+  let total = 0;
+  document.querySelectorAll('.chem').forEach(row => {
+    const qty = parseFloat(row.querySelector('.qty').value)||0;
+    const line = qty * (parseFloat(row.dataset.price)||0);
+    total += line;
+    const el = row.querySelector('.lineamt');
+    el.textContent = qty ? money(line) : '–';
+    el.classList.toggle('nz', !!qty);
+  });
+  const cust = $('custChems') && $('custChems').checked;
+  $('chemTotal').textContent = cust ? '$0.00' : money(total);
+  $('chemNote').textContent = cust ? "customer's own chems — no charge" : 'billed to customer on approval';
+}
+
+function segVal(name){
+  const on = document.querySelector(`.seg[data-name="${name}"] button.on`);
+  return on ? on.dataset.v : null;
 }
 
 async function handlePhotos(e){
@@ -190,13 +317,36 @@ function submitVisit(skipped){
   }
   const services = [...document.querySelectorAll('.svc input:checked')].map(x=>x.value);
   if (!skipped && !services.length){ toast('Check at least one service.'); return; }
+
+  const chems = {};
+  document.querySelectorAll('.chem').forEach(row => {
+    const qty = parseFloat(row.querySelector('.qty').value)||0;
+    if (qty > 0) chems[row.dataset.key] = qty;
+  });
+  const readings = {};
+  READING_FIELDS.forEach(([k]) => { const v = $('r_'+k).value; if (v !== '') readings[k] = v; });
+  const equipment = {};
+  EQUIPMENT.forEach(n => { const v = segVal('eq:'+n); if (v) equipment[n] = v; });
+
+  const workOrder = {
+    timeIn: state.timeIn, timeOut: new Date().toISOString(),
+    water: { arriveLevel: segVal('arriveLevel'), leftLevel: segVal('leftLevel'),
+             pressureIn: $('psiIn').value, pressureOut: $('psiOut').value,
+             airTemp: $('airTemp').value, waterTemp: $('waterTemp').value },
+    readings: readings,
+    chems: chems,
+    equipment: equipment,
+    filters: { cleaned: segVal('filtersCleaned'), amount: segVal('filtersAmount') },
+    repairs: $('repairs').value,
+    custChems: !!($('custChems') && $('custChems').checked)
+  };
+
   $('submit').disabled = true; $('submit').textContent = 'Sending…';
   api('submitVisit', { payload: {
       tech: state.tech, day: state.day,
       customer: state.stop.customer, address: state.stop.address,
       services: services,
-      readings: { pH: $('ph').value, Chlorine: $('cl').value, Alkalinity: $('alk').value },
-      chemicals: $('chem').value,
+      workOrder: workOrder,
       noteToCustomer: $('custnote').value,
       internalNote: $('intnote').value,
       skipped: skipped, skipReason: skipReason,
@@ -225,6 +375,34 @@ function loadOffice(){
     .catch(e => { if(/PIN/.test(e.message)){ pin=''; writeStore('apt.pin',''); askPin(); toast('Wrong PIN'); } else $('app').innerHTML='<div class="err">'+esc(e.message)+'</div>'; });
 }
 
+function officeBill(v){
+  if (v.status === 'Skipped') return '';
+  const wo = v.workOrder || {};
+  const total = (v.rate||0) + (v.chemCharge||0);
+  return `<div class="bill">
+    <span>Rate ${money(v.rate)} + Chems ${money(v.chemCharge)}${wo.custChems ? ' <i>(cust. chems)</i>' : ''}</span>
+    <b>= ${money(total)}</b>
+    ${!v.rate ? '<span class="warn">⚠ no Rate set in Customers tab</span>' : ''}
+  </div>`;
+}
+
+function officeWorkOrder(v){
+  const wo = v.workOrder;
+  if (!wo) return '';
+  let h = '';
+  if (wo.timeIn && wo.timeOut){
+    const mins = Math.max(0, Math.round((new Date(wo.timeOut)-new Date(wo.timeIn))/60000));
+    h += `<div class="kv"><b>On site:</b> ${mins} min</div>`;
+  }
+  const eq = wo.equipment || {};
+  const chips = Object.keys(eq).map(k=>`<span class="chip">${esc(k)}: ${esc(eq[k])}</span>`);
+  const f = wo.filters || {};
+  if (f.cleaned) chips.push(`<span class="chip">Filters cleaned: ${esc(f.cleaned)}${f.amount ? ' ('+esc(f.amount)+')' : ''}</span>`);
+  if (chips.length) h += `<div class="chips">${chips.join('')}</div>`;
+  if (wo.repairs) h += `<div class="kv"><b>Repairs/parts:</b> ${esc(wo.repairs)}</div>`;
+  return h;
+}
+
 function renderOffice(st){
   let h = '<div class="card qb"><span class="dot ' + (st.qbConnected?'on':'') + '"></span>' +
     (st.qbConnected ? 'QuickBooks connected'
@@ -239,9 +417,11 @@ function renderOffice(st){
       ${v.services ? `<div class="kv"><b>Services:</b> ${esc(v.services)}</div>` : ''}
       ${v.readings ? `<div class="kv"><b>Readings:</b> ${esc(v.readings)}</div>` : ''}
       ${v.chemicals ? `<div class="kv"><b>Chemicals:</b> ${esc(v.chemicals)}</div>` : ''}
+      ${officeWorkOrder(v)}
       ${v.noteToCustomer ? `<div class="kv"><b>Note to customer:</b> ${esc(v.noteToCustomer)}</div>` : ''}
       ${v.internalNote ? `<div class="kv"><b>Internal:</b> ${esc(v.internalNote)}</div>` : ''}
       ${v.photos.length ? `<div class="kv"><b>Photos:</b> ${v.photos.map((p,j)=>`<a href="${p}" target="_blank" rel="noopener">photo ${j+1}</a>`).join(' ')}</div>` : ''}
+      ${officeBill(v)}
       ${v.error ? `<div class="err">Last error: ${esc(v.error)}</div>` : ''}
       <div class="actions">
         <button class="primary" onclick="approve('${v.visitId}',${i},true,true)">Approve — invoice + email</button>
@@ -282,6 +462,7 @@ if (IS_OFFICE) {
   loadOffice();
 } else {
   render();
+  loadPrices();
   if (state.tech) loadRoute();
 }
 </script>
