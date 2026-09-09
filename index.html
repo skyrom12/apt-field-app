@@ -87,10 +87,28 @@
   .err{color:var(--err);font-size:.86rem;margin-top:6px}
   .badge{font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--line)}
   .empty{text-align:center;color:var(--muted);padding:40px 0}
+  /* .warn was used by the billing line but never defined — it rendered as plain text */
+  .warn{color:var(--warn);font-weight:600}
+  /* add-customer form */
+  .addhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .addhead h2{margin:0;font-size:1rem}
+  .addhead button{width:auto;padding:8px 14px;border:1px solid var(--line);background:#fff;border-radius:8px;font-weight:600;cursor:pointer}
+  .field .hint{font-weight:400;text-transform:none}
+  .f2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:520px){.f2{grid-template-columns:1fr}}
+  .slot{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;background:#fff}
+  .slot.on{border-color:var(--brand)}
+  .slot input{margin-top:4px;width:18px;height:18px}
+  .slot .who{font-weight:700}
+  .slot .why{color:var(--muted);font-size:.86rem;margin-top:2px}
+  .slot .mi{margin-left:auto;font-weight:700;white-space:nowrap}
+  .matched{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:.9rem;margin-bottom:10px}
+  .note{color:var(--muted);font-size:.84rem;margin-top:8px}
 </style>
 </head>
 <body>
 <header><div><h1 id="title">APT Field App</h1><div class="sub">American Pool Techs</div></div><div id="hdr"></div></header>
+<div class="wrap" id="addwrap"></div>
 <div class="wrap" id="app"><div class="spinner">Loading…</div></div>
 <div class="toast" id="toast"></div>
 
@@ -358,8 +376,12 @@ function submitVisit(skipped){
 
 /* ---------------- OFFICE VIEW ---------------- */
 let pin = readStore('apt.pin');
+let addRendered = false;   // the add-customer card is drawn once per session
+let placement = null;      // last suggestPlacement result
+let chosenSlot = 0;        // which suggestion is selected
 
 function askPin(){
+  $('addwrap').innerHTML = ''; addRendered = false;
   $('app').innerHTML = '<div class="card"><p>Office PIN:</p><input id="pin" type="password" autocomplete="off" style="padding:10px;border:1px solid var(--line);border-radius:8px">' +
     ' <button class="btn primary" id="pinbtn" style="width:auto;padding:10px 18px">Open</button></div>';
   $('pinbtn').onclick = function(){ pin = $('pin').value; writeStore('apt.pin', pin); loadOffice(); };
@@ -404,6 +426,9 @@ function officeWorkOrder(v){
 }
 
 function renderOffice(st){
+  // Drawn once and then left alone — a Refresh or an approval must not wipe a
+  // half-typed customer.
+  if (!addRendered) { renderAdd(); addRendered = true; }
   let h = '<div class="card qb"><span class="dot ' + (st.qbConnected?'on':'') + '"></span>' +
     (st.qbConnected ? 'QuickBooks connected'
       : (st.qbAuthUrl ? 'QuickBooks not connected — <a href="'+st.qbAuthUrl+'" target="_blank" rel="noopener">Connect QuickBooks</a> (reload after)'
@@ -453,6 +478,158 @@ function rejectVisit(id){
   const reason = prompt('Reason for rejecting this visit?') || '';
   api('reject', { pin: pin, visitId: id, reason: reason })
     .then(loadOffice).catch(e=>alert(e.message));
+}
+
+/* ---------------- ADD A CUSTOMER ---------------- */
+
+function renderAdd(){
+  $('addwrap').innerHTML = `
+    <div class="card">
+      <div class="addhead">
+        <h2>Add a customer</h2>
+        <button id="ac_toggle">Open</button>
+      </div>
+      <div id="ac_body" hidden>
+        <div class="field" style="margin-top:12px">
+          <label>Name <span class="hint">— last, first, the way it should read on the invoice</span></label>
+          <input id="ac_name" placeholder="Bishop, Lacey">
+        </div>
+        <div class="field">
+          <label>Service address</label>
+          <input id="ac_addr" placeholder="845 Billy Bryant Rd, Collierville, TN 38017">
+        </div>
+        <div class="f2">
+          <div class="field"><label>Email <span class="hint">— for confirmations</span></label><input id="ac_email" type="email" inputmode="email"></div>
+          <div class="field"><label>Phone</label><input id="ac_phone" inputmode="tel"></div>
+        </div>
+        <div class="f2">
+          <div class="field"><label>Rate <span class="hint">— per visit, numbers only</span></label><input id="ac_rate" inputmode="decimal" placeholder="85"></div>
+          <div class="field"><label>QuickBooks id <span class="hint">— only if the QBO name differs</span></label><input id="ac_qbid"></div>
+        </div>
+        <button class="btn primary" id="ac_find">Find the best spot</button>
+        <div class="err" id="ac_err"></div>
+        <div id="ac_result"></div>
+      </div>
+    </div>`;
+
+  $('ac_toggle').onclick = function(){
+    const body = $('ac_body');
+    body.hidden = !body.hidden;
+    this.textContent = body.hidden ? 'Open' : 'Close';
+    if (!body.hidden) $('ac_name').focus();
+  };
+  $('ac_find').onclick = () => findSpot();
+}
+
+async function findSpot(manualLat, manualLng){
+  const addr = $('ac_addr').value.trim();
+  $('ac_err').textContent = '';
+  if (!$('ac_name').value.trim()) { $('ac_err').textContent = 'Enter the customer name first.'; return; }
+  if (!addr) { $('ac_err').textContent = 'Enter the service address first.'; return; }
+
+  const btn = $('ac_find');
+  btn.disabled = true; btn.textContent = 'Looking…';
+  try {
+    placement = await api('suggestPlacement', {
+      pin: pin, address: addr, lat: manualLat || '', lng: manualLng || ''
+    });
+    chosenSlot = 0;
+    renderSlots();
+  } catch (e) {
+    placement = null;
+    $('ac_err').textContent = e.message;
+    renderManualCoords();   // geocoder struck out — let them paste coordinates
+  } finally {
+    btn.disabled = false; btn.textContent = 'Find the best spot';
+  }
+}
+
+/** "between X and Y" / "new first stop" / "opens an empty day". */
+function slotWhere(s){
+  if (s.newDay) return 'opens ' + s.tech + '’s empty ' + s.day;
+  if (!s.afterCustomer) return 'new first stop, ahead of ' + s.beforeCustomer;
+  if (!s.beforeCustomer) return 'new last stop, after ' + s.afterCustomer;
+  return 'between ' + s.afterCustomer + ' and ' + s.beforeCustomer;
+}
+
+function renderSlots(){
+  const p = placement;
+  let h = `<div class="matched"><b>Matched:</b> ${esc(p.formattedAddress)}` +
+    (p.manual ? ' <span class="warn">(your coordinates)</span>' : '') +
+    (p.approximate ? '<div class="warn">⚠ Only an approximate match — check this is the right house before adding.</div>' : '') +
+    (p.matchCount > 1 ? `<div class="note">${p.matchCount} addresses matched; using the closest.</div>` : '') +
+    '</div>';
+
+  if (!p.suggestions.length) { h += '<div class="err">No route to add this to.</div>'; $('ac_result').innerHTML = h; return; }
+
+  h += p.suggestions.map((s, i) => `
+    <label class="slot ${i===chosenSlot?'on':''}">
+      <input type="radio" name="ac_slot" value="${i}" ${i===chosenSlot?'checked':''}>
+      <div>
+        <div class="who">${esc(s.tech)} · ${esc(s.day)} · stop ${s.position}</div>
+        <div class="why">${esc(slotWhere(s))}${s.newDay ? '' : ` · that day has ${s.load} stops`}</div>
+        ${s.penaltyMi > 0 ? `<div class="why warn">Already at ${s.load} stops — heavy day.</div>` : ''}
+      </div>
+      <div class="mi">+${s.detourMi} mi</div>
+    </label>`).join('');
+
+  h += `<button class="btn primary" id="ac_save">Add to ${esc(p.suggestions[chosenSlot].tech)}’s ${esc(p.suggestions[chosenSlot].day)}</button>
+    <div class="note">Added miles are straight-line, between stops — the same measure the route plan uses. Driving order is renumbered automatically.</div>
+    <div class="err" id="ac_saveerr"></div>`;
+
+  $('ac_result').innerHTML = h;
+  [...document.querySelectorAll('input[name=ac_slot]')].forEach(r => {
+    r.onchange = () => { chosenSlot = Number(r.value); renderSlots(); };
+  });
+  $('ac_save').onclick = saveCustomer;
+}
+
+/** Fallback when the geocoder can't place the address. */
+function renderManualCoords(){
+  $('ac_result').innerHTML = `
+    <div class="matched">
+      <div>Type the coordinates instead: open Google Maps, press and hold (or
+      right-click) the house, then tap the numbers to copy them.</div>
+      <div class="f2" style="margin-top:10px">
+        <div class="field"><label>Latitude</label><input id="ac_lat" inputmode="decimal" placeholder="35.0421"></div>
+        <div class="field"><label>Longitude</label><input id="ac_lng" inputmode="decimal" placeholder="-89.6712"></div>
+      </div>
+      <button class="btn primary" id="ac_manual">Use these coordinates</button>
+    </div>`;
+  $('ac_manual').onclick = function(){
+    const lat = $('ac_lat').value.trim(), lng = $('ac_lng').value.trim();
+    if (!lat || !lng) { $('ac_err').textContent = 'Both numbers are needed.'; return; }
+    findSpot(lat, lng);
+  };
+}
+
+async function saveCustomer(){
+  const s = placement.suggestions[chosenSlot];
+  const btn = $('ac_save');
+  btn.disabled = true; btn.textContent = 'Adding…';
+  try {
+    const r = await api('addCustomer', { pin: pin, payload: {
+      customer: $('ac_name').value.trim(),
+      address: $('ac_addr').value.trim(),
+      lat: placement.lat, lng: placement.lng,
+      tech: s.tech, day: s.day, newOrder: s.newOrder,
+      email: $('ac_email').value.trim(),
+      phone: $('ac_phone').value.trim(),
+      rate: $('ac_rate').value.trim(),
+      qbCustomerId: $('ac_qbid').value.trim()
+    }});
+    let msg = 'Added to ' + r.tech + '’s ' + r.day + ' route as stop ' + r.order + '.';
+    (r.warnings || []).forEach(w => msg += '\n\n⚠ ' + w);
+    alert(msg);
+    ['ac_name','ac_addr','ac_email','ac_phone','ac_rate','ac_qbid']
+      .forEach(id => { $(id).value = ''; });
+    $('ac_result').innerHTML = ''; placement = null; chosenSlot = 0;
+    toast('Customer added');
+    loadOffice();
+  } catch (e) {
+    $('ac_saveerr').textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Add customer';
+  }
 }
 
 /* ---------------- BOOT ---------------- */
