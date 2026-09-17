@@ -1,0 +1,107 @@
+/**
+ * APT Field App — entry point and shared helpers.
+ * Owner account: appamericanpooltechs@gmail.com
+ *
+ * Views:
+ *   {webAppUrl}                → tech view (route of the day, visit form)
+ *   {webAppUrl}?view=office    → office approval queue (PIN-protected)
+ */
+
+const PROPS = PropertiesService.getScriptProperties();
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const TECHS = ['Adam', 'Bradley', 'Nick', 'Zack'];
+
+function doGet(e) {
+  const view = (e && e.parameter && e.parameter.view) || 'tech';
+  const tpl = HtmlService.createTemplateFromFile(view === 'office' ? 'Office' : 'Tech');
+  return tpl.evaluate()
+    .setTitle('APT Field App')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
+}
+
+function getSpreadsheet_() {
+  const id = PROPS.getProperty('SPREADSHEET_ID');
+  if (!id) throw new Error('Run setup() first (Setup.js).');
+  return SpreadsheetApp.openById(id);
+}
+
+function getSheet_(name) {
+  const sh = getSpreadsheet_().getSheetByName(name);
+  if (!sh) throw new Error('Missing sheet: ' + name);
+  return sh;
+}
+
+/**
+ * Read a sheet into an array of objects keyed by header row.
+ *
+ * `_row` is the real spreadsheet row and callers write back by it (approve,
+ * renumber), so it has to be counted BEFORE blank rows are dropped — numbering
+ * the survivors instead would point every write below a blank row at the wrong
+ * row.
+ */
+function readTable_(name) {
+  const values = getSheet_(name).getDataRange().getValues();
+  const head = values.shift();
+  const rows = [];
+  values.forEach(function (r, i) {
+    if (r.join('') === '') return;
+    const o = { _row: i + 2 };
+    head.forEach(function (h, c) { o[h] = r[c]; });
+    rows.push(o);
+  });
+  return rows;
+}
+
+function requirePin_(pin) {
+  const expected = PROPS.getProperty('OFFICE_PIN');
+  if (!expected) throw new Error('OFFICE_PIN is not set in Script Properties.');
+  if (String(pin) !== String(expected)) throw new Error('Wrong office PIN.');
+}
+
+function todayDayCode_() {
+  const idx = new Date().getDay(); // 0=Sun
+  return (idx >= 1 && idx <= 5) ? DAYS[idx - 1] : null;
+}
+
+/**
+ * JSON API for the external PWA front-end (app.americanpooltechs.com).
+ * POST body: {action, ...params}. Content-Type must be text/plain to avoid
+ * a CORS preflight; anonymous Apps Script responses carry CORS headers.
+ */
+function doPost(e) {
+  let out;
+  try {
+    const req = JSON.parse(e.postData.contents);
+    switch (req.action) {
+      case 'getRoute':
+        out = { ok: true, data: apiGetRoute(req.tech, req.day) }; break;
+      case 'getPrices':
+        out = { ok: true, data: apiGetPrices() }; break;
+      case 'submitVisit':
+        out = { ok: true, data: apiSubmitVisit(req.payload) }; break;
+      case 'officeState':
+        out = { ok: true, data: apiOfficeState(req.pin) }; break;
+      case 'approve':
+        out = { ok: true, data: apiApproveVisit(req.pin, req.visitId, req.options) }; break;
+      case 'reject':
+        out = { ok: true, data: apiRejectVisit(req.pin, req.visitId, req.reason) }; break;
+      case 'suggestPlacement':
+        out = { ok: true, data: apiSuggestPlacement(req.pin, req.address, req.lat, req.lng) }; break;
+      case 'addCustomer':
+        out = { ok: true, data: apiAddCustomer(req.pin, req.payload) }; break;
+      case 'listCustomers':
+        out = { ok: true, data: apiListCustomers(req.pin) }; break;
+      case 'updateCustomer':
+        out = { ok: true, data: apiUpdateCustomer(req.pin, req.customer, req.address, req.fields) }; break;
+      case 'removeCustomer':
+        out = { ok: true, data: apiRemoveCustomer(req.pin, req.customer, req.address) }; break;
+      default:
+        throw new Error('Unknown action: ' + req.action);
+    }
+  } catch (err) {
+    out = { ok: false, error: String(err.message || err) };
+  }
+  return ContentService.createTextOutput(JSON.stringify(out))
+    .setMimeType(ContentService.MimeType.JSON);
+}
