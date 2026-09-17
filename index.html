@@ -104,6 +104,22 @@
   .slot .mi{margin-left:auto;font-weight:700;white-space:nowrap}
   .matched{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:.9rem;margin-bottom:10px}
   .note{color:var(--muted);font-size:.84rem;margin-top:8px}
+  /* customers panel */
+  .cu-search{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;margin:12px 0 8px}
+  .cu-count{color:var(--muted);font-size:.84rem;margin-bottom:8px}
+  .cu{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#fff}
+  .cu-head{display:flex;gap:10px;align-items:center;padding:10px 12px;cursor:pointer}
+  .cu-head .nm{font-weight:700}
+  .cu-head .ad{color:var(--muted);font-size:.84rem}
+  .cu-head .rt{margin-left:auto;font-weight:700;white-space:nowrap}
+  .cu-head .rt.none{color:var(--warn);font-weight:600;font-size:.84rem}
+  .cu-days{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .cu-days .chip{font-size:.74rem;padding:2px 8px}
+  .cu.inactive .cu-head{opacity:.55}
+  .cu-body{border-top:1px solid var(--line);padding:12px}
+  .cu-body .actions{margin-top:8px}
+  .cu-flag{font-size:.78rem;font-weight:700;padding:2px 8px;border-radius:99px;background:#fff3e0;color:var(--warn);border:1px solid #f3d9a4}
+  .cu-orph{background:#fff3e0;border:1px solid #f3d9a4;border-radius:8px;padding:10px 12px;font-size:.9rem;margin-top:12px}
 </style>
 </head>
 <body>
@@ -428,7 +444,7 @@ function officeWorkOrder(v){
 function renderOffice(st){
   // Drawn once and then left alone — a Refresh or an approval must not wipe a
   // half-typed customer.
-  if (!addRendered) { renderAdd(); addRendered = true; }
+  if (!addRendered) { renderAdd(); renderCustomersCard(); addRendered = true; }
   let h = '<div class="card qb"><span class="dot ' + (st.qbConnected?'on':'') + '"></span>' +
     (st.qbConnected ? 'QuickBooks connected'
       : (st.qbAuthUrl ? 'QuickBooks not connected — <a href="'+st.qbAuthUrl+'" target="_blank" rel="noopener">Connect QuickBooks</a> (reload after)'
@@ -629,6 +645,184 @@ async function saveCustomer(){
   } catch (e) {
     $('ac_saveerr').textContent = e.message;
     btn.disabled = false; btn.textContent = 'Add customer';
+  }
+}
+
+/* ---------------- CUSTOMERS ---------------- */
+
+let cust = { list: null, orphans: [], q: '', open: null, loading: false };
+
+function custKey(c){ return c.customer + '|' + c.address; }
+
+function renderCustomersCard(){
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="addhead">
+      <h2>Customers</h2>
+      <button id="cu_toggle">Open</button>
+    </div>
+    <div id="cu_body" hidden>
+      <input class="cu-search" id="cu_q" placeholder="Search by name or address" autocomplete="off">
+      <div class="cu-count" id="cu_count"></div>
+      <div id="cu_list"></div>
+      <div id="cu_orph"></div>
+    </div>`;
+  $('addwrap').appendChild(card);
+
+  $('cu_toggle').onclick = function(){
+    const body = $('cu_body');
+    body.hidden = !body.hidden;
+    this.textContent = body.hidden ? 'Open' : 'Close';
+    if (!body.hidden) { if (!cust.list) loadCustomers(); else $('cu_q').focus(); }
+  };
+  $('cu_q').oninput = e => { cust.q = e.target.value; cust.open = null; renderCustList(); };
+}
+
+async function loadCustomers(){
+  cust.loading = true;
+  $('cu_count').textContent = 'Loading…';
+  try {
+    const r = await api('listCustomers', { pin: pin });
+    cust.list = r.customers; cust.orphans = r.orphans || [];
+    renderCustList();
+    $('cu_q').focus();
+  } catch (e) {
+    $('cu_count').innerHTML = '<span class="err">' + esc(e.message) + '</span>';
+  } finally { cust.loading = false; }
+}
+
+function custMatches(c, q){
+  if (!q) return true;
+  const hay = (c.customer + ' ' + c.address).toLowerCase();
+  return q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+
+function renderCustList(){
+  if (!cust.list) return;
+  const q = cust.q.trim();
+  const all = cust.list.filter(c => custMatches(c, q));
+  const active = all.filter(c => c.days.length);
+  const inactive = all.filter(c => !c.days.length);
+  const CAP = 60;
+  const shown = active.slice(0, CAP);
+
+  $('cu_count').textContent =
+    `${active.length} on routes` + (inactive.length ? ` · ${inactive.length} inactive` : '') +
+    (active.length > CAP ? ` · showing the first ${CAP} — narrow the search` : '');
+
+  const row = (c, i, isInactive) => {
+    const key = custKey(c);
+    const opened = cust.open === key;
+    return `
+    <div class="cu ${isInactive ? 'inactive' : ''}" data-key="${esc(key)}">
+      <div class="cu-head" data-act="toggle">
+        <div>
+          <div class="nm">${esc(c.customer)}</div>
+          <div class="ad">${esc(c.address)}</div>
+          <div class="cu-days">${
+            c.days.length
+              ? c.days.map(d => `<span class="chip">${esc(d.tech)} ${esc(d.day)} · #${d.order}</span>`).join('')
+              : '<span class="chip">not on a route</span>'}
+            ${c.openVisits ? `<span class="cu-flag">${c.openVisits} awaiting approval</span>` : ''}
+            ${!c.email && c.days.length ? '<span class="cu-flag">no email</span>' : ''}
+          </div>
+        </div>
+        <div class="rt ${c.rate == null ? 'none' : ''}">${c.rate == null ? 'no rate' : '$' + c.rate}</div>
+      </div>
+      ${opened ? `
+      <div class="cu-body">
+        <div class="f2">
+          <div class="field"><label>Email</label><input data-f="email" value="${esc(c.email)}" inputmode="email"></div>
+          <div class="field"><label>Phone</label><input data-f="phone" value="${esc(c.phone)}" inputmode="tel"></div>
+        </div>
+        <div class="f2">
+          <div class="field"><label>Rate <span class="hint">— per visit</span></label><input data-f="rate" value="${c.rate == null ? '' : c.rate}" inputmode="decimal"></div>
+          <div class="field"><label>QuickBooks id</label><input data-f="qbCustomerId" value="${esc(c.qbCustomerId)}"></div>
+        </div>
+        <div class="actions">
+          <button class="primary" data-act="save">Save</button>
+          ${c.days.length ? `<button class="danger" data-act="remove" ${c.openVisits ? 'disabled' : ''}>Remove from routes</button>` : ''}
+        </div>
+        ${c.openVisits ? `<div class="note">Can't remove while ${c.openVisits} visit${c.openVisits > 1 ? 's are' : ' is'} waiting for approval — clear the queue first.</div>` : ''}
+        ${!c.days.length ? `<div class="actions" style="margin-top:0"><button class="primary" data-act="readd">Add back to routes</button></div>
+        <div class="note">Fills in <b>Add a customer</b> from their record, so the name and address match exactly. Then pick a slot as usual — they'll be placed against the routes as they stand now.</div>` : ''}
+        <div class="err" data-err></div>
+      </div>` : ''}
+    </div>`;
+  };
+
+  let h = shown.map((c, i) => row(c, i, false)).join('');
+  if (inactive.length) h += inactive.map((c, i) => row(c, i, true)).join('');
+  if (!all.length) h = '<div class="empty">No customers match.</div>';
+  $('cu_list').innerHTML = h;
+
+  $('cu_orph').innerHTML = cust.orphans.length ? `
+    <div class="cu-orph"><b>${cust.orphans.length} route stop${cust.orphans.length > 1 ? 's have' : ' has'} no customer record</b> —
+      they'll invoice at $0 and email nobody. Add each through <b>Add a customer</b> with the exact same name and address to fix:
+      <ul style="margin:6px 0 0 18px;padding:0">${cust.orphans.map(o =>
+        `<li>${esc(o.customer)} — ${esc(o.address)} <span class="ad">(${o.days.map(d => d.tech + ' ' + d.day).join(', ')})</span></li>`).join('')}</ul>
+    </div>` : '';
+
+  [...document.querySelectorAll('#cu_list .cu')].forEach(el => {
+    const key = el.dataset.key;
+    el.querySelector('[data-act=toggle]').onclick = () => { cust.open = cust.open === key ? null : key; renderCustList(); };
+    const save = el.querySelector('[data-act=save]');
+    if (save) save.onclick = () => cuSave(el, key);
+    const rm = el.querySelector('[data-act=remove]');
+    if (rm) rm.onclick = () => cuRemove(el, key);
+    const re = el.querySelector('[data-act=readd]');
+    if (re) re.onclick = () => cuReadd(key);
+  });
+}
+
+/** Pre-fill the add form from a stored record so re-adding never retypes the address. */
+function cuReadd(key){
+  const c = cust.list.find(x => custKey(x) === key);
+  $('ac_name').value = c.customer;
+  $('ac_addr').value = c.address;
+  $('ac_email').value = c.email;
+  $('ac_phone').value = c.phone;
+  $('ac_rate').value = c.rate == null ? '' : c.rate;
+  $('ac_qbid').value = c.qbCustomerId;
+  $('ac_result').innerHTML = ''; placement = null;
+  if ($('ac_body').hidden) $('ac_toggle').click();
+  $('ac_body').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast('Form filled — now Find the best spot');
+}
+
+async function cuSave(el, key){
+  const c = cust.list.find(x => custKey(x) === key);
+  const fields = {};
+  el.querySelectorAll('[data-f]').forEach(i => { fields[i.dataset.f] = i.value.trim(); });
+  const btn = el.querySelector('[data-act=save]');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    await api('updateCustomer', { pin: pin, customer: c.customer, address: c.address, fields: fields });
+    Object.assign(c, { email: fields.email, phone: fields.phone, qbCustomerId: fields.qbCustomerId,
+                       rate: fields.rate === '' ? null : Number(fields.rate) });
+    toast('Saved');
+    renderCustList();
+  } catch (e) {
+    el.querySelector('[data-err]').textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+}
+
+async function cuRemove(el, key){
+  const c = cust.list.find(x => custKey(x) === key);
+  const days = c.days.map(d => d.tech + ' ' + d.day).join(' and ');
+  if (!confirm(`Remove ${c.customer} from ${days}?\n\nTheir visit history and photos are kept. To bring them back later, use Add a customer.`)) return;
+  const btn = el.querySelector('[data-act=remove]');
+  btn.disabled = true; btn.textContent = 'Removing…';
+  try {
+    const r = await api('removeCustomer', { pin: pin, customer: c.customer, address: c.address });
+    c.days = []; c.active = false; cust.open = null;
+    toast(`Removed from ${r.days.join(', ')}`);
+    renderCustList();
+  } catch (e) {
+    el.querySelector('[data-err]').textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Remove from routes';
   }
 }
 
