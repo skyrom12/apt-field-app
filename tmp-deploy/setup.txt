@@ -1,0 +1,210 @@
+/**
+ * One-time setup. Run setup() from the Apps Script editor as the owner account.
+ * Creates the spreadsheet, tabs, Drive photo folder, and seeds routes+customers
+ * from the shared route sheets (SeedData.gs). Safe to re-run: it will not
+ * overwrite tabs that already have data.
+ */
+
+function setup() {
+  let ssId = PROPS.getProperty('SPREADSHEET_ID');
+  let ss;
+  if (ssId) {
+    ss = SpreadsheetApp.openById(ssId);
+  } else {
+    ss = SpreadsheetApp.create('APT Field Ops');
+    PROPS.setProperty('SPREADSHEET_ID', ss.getId());
+  }
+
+  const seed = loadSeedRows_();
+
+  ensureTab_(ss, 'Routes',
+    ['Tech', 'Day', 'Order', 'Customer', 'Address', 'Lat', 'Lng'],
+    seed.map(function (r) {
+      return [r.tech, r.day, r.order, r.customer, r.address, r.lat, r.lng];
+    }));
+
+  // Unique customers; office fills Email, Phone, Rate, QBCustomerId.
+  const seen = {};
+  const customers = [];
+  seed.forEach(function (r) {
+    const key = r.customer + '|' + r.address;
+    if (!seen[key]) {
+      seen[key] = true;
+      customers.push([r.customer, r.address, '', '', '', '', 'TRUE']);
+    }
+  });
+  ensureTab_(ss, 'Customers',
+    ['Customer', 'Address', 'Email', 'Phone', 'Rate', 'QBCustomerId', 'Active'],
+    customers);
+
+  ensureTab_(ss, 'VisitLog',
+    ['VisitId', 'Timestamp', 'Tech', 'Day', 'Customer', 'Address', 'Services',
+     'Readings', 'Chemicals', 'NoteToCustomer', 'InternalNote', 'Photos',
+     'Status', 'InvoiceId', 'ApprovedBy', 'ApprovedAt', 'EmailSentAt', 'Error',
+     'WorkOrder', 'ChemCharge'],
+    []);
+
+  const def = ss.getSheetByName('Sheet1');
+  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+
+  if (!PROPS.getProperty('PHOTOS_FOLDER_ID')) {
+    const folder = DriveApp.createFolder('APT Visit Photos');
+    PROPS.setProperty('PHOTOS_FOLDER_ID', folder.getId());
+  }
+  if (!PROPS.getProperty('OFFICE_PIN')) {
+    PROPS.setProperty('OFFICE_PIN', String(Math.floor(100000 + Math.random() * 900000)));
+  }
+
+  setupWorkOrder();
+
+  Logger.log('Setup complete. Seeded ' + seed.length + ' route rows.');
+  Logger.log('Spreadsheet: ' + ss.getUrl());
+  Logger.log('Office PIN: ' + PROPS.getProperty('OFFICE_PIN'));
+}
+
+function ensureTab_(ss, name, header, rows) {
+  let sh = ss.getSheetByName(name);
+  if (sh && sh.getLastRow() > 1) return sh; // has data - leave it alone
+  if (!sh) sh = ss.insertSheet(name);
+  sh.clear();
+  sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
+  if (rows.length) sh.getRange(2, 1, rows.length, header.length).setValues(rows);
+  sh.setFrozenRows(1);
+  return sh;
+}
+
+/**
+ * One-time migration 2026-08-26: tech Josh renamed to Zack; all 10 Mississippi
+ * stops consolidated to a single Friday run in optimized order. Idempotent —
+ * after it runs once there are no Tech='Josh' rows left to match.
+ */
+function migrateJoshToZack() {
+  const newOrder = ['Strong, Tyler','Sutherland, Leslie','Houzenga, Nathan','Grisanti, Alex',
+    'Aschenbrenner, Tracy','Williams, Randy','Ibra, Rente','Wright, Derek',
+    'Rodgers, Tammie','Gunter, Rob'];
+  const sh = getSheet_('Routes');
+  const values = sh.getDataRange().getValues();
+  const head = values[0];
+  const iTech = head.indexOf('Tech'), iDay = head.indexOf('Day'),
+        iOrder = head.indexOf('Order'), iCust = head.indexOf('Customer');
+  let n = 0;
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][iTech]) === 'Josh') {
+      values[r][iTech] = 'Zack';
+      values[r][iDay] = 'Fri';
+      const idx = newOrder.indexOf(String(values[r][iCust]).trim());
+      values[r][iOrder] = idx >= 0 ? idx + 1 : 99;
+      n++;
+    }
+  }
+  sh.getDataRange().setValues(values);
+  Logger.log('Migrated ' + n + ' route rows from Josh to Zack (Fri).');
+}
+
+/**
+ * Work-order upgrade 2026-08-26 (digitizes the paper work order):
+ * - Prices tab: chemical price list. THE source of truth for pricing — the
+ *   office edits prices here, no code change needed. Keys are stable ids that
+ *   the future QuickBooks line-item automation will map to QBO items.
+ * - VisitLog gains WorkOrder (col 19, full structured form as JSON) and
+ *   ChemCharge (col 20, computed server-side at submit).
+ * Idempotent: Prices is only seeded when empty; headers only added if missing.
+ */
+function setupWorkOrder() {
+  const ss = getSpreadsheet_();
+
+  // Seeded from the printed "Chem cost list" dated 2026-08-24. dichlor_lb and
+  // ch_lb are on the paper work order but not the price sheet — office sets
+  // their price in the Prices tab when known (0 = logged but not billed).
+  ensureTab_(ss, 'Prices', ['Key', 'Label', 'Unit', 'Price'], [
+    ['tabs',           '3" Chlorine Tab',                 'tab',          4.85],
+    ['shock_lb',       'Chlorine Shock',                  'lb',           5.25],
+    ['dichlor_lb',     'Dychlor',                         'lb',           0],
+    ['acid_gal',       'Muriatic Acid',                   'gal',          16.42],
+    ['alk_lb',         'Alkalinity Up (Sodium Bicarb)',   'lb',           1.45],
+    ['stab_lb',        'Stabilizer (Cyanuric Acid)',      'lb',           3.95],
+    ['ch_lb',          'Calcium Hardness Up',             'lb',           0],
+    ['salt_bag',       'Pool Salt',                       '40 lb bag',    18.00],
+    ['phosfree_oz',    'Phosfree',                        'oz',           1.41],
+    ['superphos_qt',   'Super Phosphate Remover',         'qt',           48.00],
+    ['clarifier_oz',   'Sea Clear Clarifier',             'oz',           1.00],
+    ['metalout_btl',   'Metal Out',                       '32 oz bottle', 28.00],
+    ['algaecide60_qt', 'Algaecide 60%',                   'qt',           32.00],
+    ['dropout_btl',    'Drop Out',                        '32 oz bottle', 50.00],
+    ['algaekill_gal',  'Algae Kill',                      'gal',          45.00],
+    ['copperalg_oz',   'Copper Algaecide',                'oz',           1.23],
+    ['stainfree_ea',   'Stainfree Stain Treatment',       'treatment',    45.00]
+  ]);
+
+  const vl = ss.getSheetByName('VisitLog');
+  const head = vl.getRange(1, 1, 1, vl.getLastColumn()).getValues()[0];
+  if (head.indexOf('WorkOrder') < 0) {
+    vl.getRange(1, head.length + 1, 1, 2)
+      .setValues([['WorkOrder', 'ChemCharge']]).setFontWeight('bold');
+    Logger.log('Added WorkOrder/ChemCharge columns to VisitLog.');
+  }
+  Logger.log('Work-order setup complete.');
+}
+
+/**
+ * Price list refresh from the printed "Prices" work order dated 2026-09-09.
+ * Fills in Calcium Hardness (it had no price on the 8/24 sheet) and adds the
+ * three items that were missing: Black Algae T, Rubber Plugs, Water Bags.
+ * Existing keys keep their key, so quantities already logged still price
+ * correctly. Safe to re-run; logs anything on the tab the 9/9 sheet omits.
+ */
+function updatePrices20260909() {
+  const rows = [
+    ['tabs',           '3" Chlorine Tab',               'tab',          4.85],
+    ['shock_lb',       'Chlorine Shock',                'lb',           5.25],
+    ['alk_lb',         'Alkalinity Up (Sodium Bicarb)', 'lb',           1.45],
+    ['acid_gal',       'Muriatic Acid',                 'gal',          16.42],
+    ['ch_lb',          'Calcium Hardness',              'lb',           5.50],
+    ['phosfree_oz',    'Phosfree',                      'oz',           1.41],
+    ['superphos_qt',   'Super Phosphate Remover',       'qt',           48.00],
+    ['clarifier_oz',   'Sea Clear Clarifier',           'oz',           1.00],
+    ['metalout_btl',   'Metal Out',                     '32 oz bottle', 28.00],
+    ['algaecide60_qt', 'Algaecide 60%',                 'qt',           32.00],
+    ['stab_lb',        'Stabilizer (Cyanuric Acid)',    'lb',           3.95],
+    ['dropout_btl',    'Drop Out',                      '32 oz bottle', 50.00],
+    ['salt_bag',       'Pool Salt',                     '40 lb bag',    18.00],
+    ['blackalgae_oz',  'Black Algae T',                 'oz',           1.82],
+    ['stainfree_ea',   'Stainfree Stain Treatment',     'treatment',    45.00],
+    ['rubberplugs_ea', 'Rubber Plugs',                  'plug',         8.00],
+    ['waterbags_ea',   'Water Bags',                    'bag',          15.00]
+  ];
+  const sh = getSheet_('Prices');
+  const vals = sh.getDataRange().getValues();
+  const head = vals[0];
+  const iKey = head.indexOf('Key'), iLabel = head.indexOf('Label'),
+        iUnit = head.indexOf('Unit'), iPrice = head.indexOf('Price');
+
+  const seen = {};
+  for (let r = 1; r < vals.length; r++) seen[String(vals[r][iKey]).trim()] = r;
+
+  let updated = 0, added = 0;
+  rows.forEach(function (n) {
+    const r = seen[n[0]];
+    if (r) {
+      vals[r][iLabel] = n[1]; vals[r][iUnit] = n[2]; vals[r][iPrice] = n[3];
+      updated++;
+    } else {
+      const row = [];
+      for (let c = 0; c < head.length; c++) row.push('');
+      row[iKey] = n[0]; row[iLabel] = n[1]; row[iUnit] = n[2]; row[iPrice] = n[3];
+      vals.push(row);
+      added++;
+    }
+  });
+  sh.getRange(1, 1, vals.length, head.length).setValues(vals);
+
+  const current = {};
+  rows.forEach(function (n) { current[n[0]] = true; });
+  const stale = [];
+  for (let r = 1; r < vals.length; r++) {
+    const k = String(vals[r][iKey]).trim();
+    if (k && !current[k]) stale.push(k + ' (' + vals[r][iLabel] + ')');
+  }
+  Logger.log('Prices: ' + updated + ' updated, ' + added + ' added.');
+  Logger.log('Not on the 9/9 sheet, left in place: ' + (stale.join(', ') || 'none'));
+}
