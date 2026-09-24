@@ -137,8 +137,7 @@ const SERVICES = ['Skimmed surface','Brushed walls & steps','Vacuumed pool','Emp
                   'Checked equipment'];
 // Chemicals shown up front (the paper form's right-hand column); the rest sit
 // behind "More chemicals". Keys must match the Prices tab in APT Field Ops.
-const COMMON_CHEMS = ['tabs','shock_lb','dichlor_lb','acid_gal','alk_lb','stab_lb','ch_lb','salt_bag'];
-const EQUIPMENT = ['Skimmer(s)','AutoCleaner','FingerScreen','Vacuum','Brush','NetDebris','EnergyFilter','PumpBasket'];
+const COMMON_CHEMS = ['tabs','shock_lb','acid_gal','alk_lb','stab_lb','ch_lb','salt_bag'];
 const READING_FIELDS = [
   ['ch','Calcium ppm'],['tc','Total Cl ppm'],['fc','Free Cl ppm'],['ph','pH'],
   ['alk','Alkalinity'],['cya','Stabilizer'],['salt','Salt'],['phos','Phosphates']
@@ -215,11 +214,6 @@ function openStop(order){
   render();
 }
 
-function segRow(label, name, opts){
-  return `<div class="segrow"><span class="sl">${label}</span><span class="seg" data-name="${name}">` +
-    opts.map(o=>`<button type="button" data-v="${o}">${o}</button>`).join('') + '</span></div>';
-}
-
 function chemRow(p){
   return `<div class="chem" data-key="${p.key}" data-price="${p.price}">
     <div class="cl"><b>${esc(p.label)}</b><span>${p.price ? money(p.price)+' / '+esc(p.unit) : 'per '+esc(p.unit)+' — price not set'}</span></div>
@@ -244,16 +238,6 @@ function renderForm(){
 
       <div class="svc">${SERVICES.map(x=>`<label><input type="checkbox" value="${x}">${x}</label>`).join('')}</div>
 
-      <div class="sect">Water</div>
-      ${segRow('Level — arrive','arriveLevel',['BS','L','H','P'])}
-      ${segRow('Level — leaving','leftLevel',['L','H','P'])}
-      <div class="grid4">
-        <div class="field"><label>PSI in</label><input id="psiIn" inputmode="decimal"></div>
-        <div class="field"><label>PSI out</label><input id="psiOut" inputmode="decimal"></div>
-        <div class="field"><label>Air °</label><input id="airTemp" inputmode="decimal"></div>
-        <div class="field"><label>Water °</label><input id="waterTemp" inputmode="decimal"></div>
-      </div>
-
       <div class="sect">Water tests</div>
       <div class="grid4">
         ${READING_FIELDS.map(([k,l])=>`<div class="field"><label>${l}</label><input id="r_${k}" inputmode="decimal"></div>`).join('')}
@@ -267,15 +251,10 @@ function renderForm(){
       <label class="custchem"><input type="checkbox" id="custChems" onchange="recalc()">Customer's own chemicals — don't bill</label>
       <div class="totalbar"><span>Chemicals<small id="chemNote">billed to customer on approval</small></span><span id="chemTotal">$0.00</span></div>
 
-      <div class="sect">Equipment condition <span style="font-weight:400;text-transform:none;color:var(--muted)">(E-L-M-H)</span></div>
-      ${EQUIPMENT.map(n=>segRow(n,'eq:'+n,['E','L','M','H'])).join('')}
-      ${segRow('Filters cleaned','filtersCleaned',['Y','N'])}
-      ${segRow('Filter debris','filtersAmount',['L','M','H'])}
-      <div class="field"><label>Repairs / parts needed (office only)</label><textarea id="repairs"></textarea></div>
-
       <div class="sect">Wrap up</div>
       <div class="field"><label>Note to customer (goes in their email)</label><textarea id="custnote"></textarea></div>
       <div class="field"><label>Internal note (office only)</label><textarea id="intnote"></textarea></div>
+      <div class="field"><label>Repairs / parts needed (office only)</label><textarea id="repairs"></textarea></div>
       <div class="field"><label>Photos</label>
         <input type="file" id="photos" accept="image/*" multiple capture="environment">
         <div class="thumbs" id="thumbs"></div></div>
@@ -283,13 +262,6 @@ function renderForm(){
       <button class="btn ghost" onclick="submitVisit(true)">Unable to service…</button>
     </div>`;
   $('photos').onchange = handlePhotos;
-  document.querySelectorAll('.seg button').forEach(b => {
-    b.onclick = () => {
-      const was = b.classList.contains('on');
-      b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
-      if (!was) b.classList.add('on');   // tapping the active one clears it
-    };
-  });
 }
 
 function bump(btn, d){
@@ -314,10 +286,6 @@ function recalc(){
   $('chemNote').textContent = cust ? "customer's own chems — no charge" : 'billed to customer on approval';
 }
 
-function segVal(name){
-  const on = document.querySelector(`.seg[data-name="${name}"] button.on`);
-  return on ? on.dataset.v : null;
-}
 
 async function handlePhotos(e){
   state.photos = [];
@@ -359,18 +327,11 @@ function submitVisit(skipped){
   });
   const readings = {};
   READING_FIELDS.forEach(([k]) => { const v = $('r_'+k).value; if (v !== '') readings[k] = v; });
-  const equipment = {};
-  EQUIPMENT.forEach(n => { const v = segVal('eq:'+n); if (v) equipment[n] = v; });
 
   const workOrder = {
     timeIn: state.timeIn, timeOut: new Date().toISOString(),
-    water: { arriveLevel: segVal('arriveLevel'), leftLevel: segVal('leftLevel'),
-             pressureIn: $('psiIn').value, pressureOut: $('psiOut').value,
-             airTemp: $('airTemp').value, waterTemp: $('waterTemp').value },
     readings: readings,
     chems: chems,
-    equipment: equipment,
-    filters: { cleaned: segVal('filtersCleaned'), amount: segVal('filtersAmount') },
     repairs: $('repairs').value,
     custChems: !!($('custChems') && $('custChems').checked)
   };
@@ -432,11 +393,6 @@ function officeWorkOrder(v){
     const mins = Math.max(0, Math.round((new Date(wo.timeOut)-new Date(wo.timeIn))/60000));
     h += `<div class="kv"><b>On site:</b> ${mins} min</div>`;
   }
-  const eq = wo.equipment || {};
-  const chips = Object.keys(eq).map(k=>`<span class="chip">${esc(k)}: ${esc(eq[k])}</span>`);
-  const f = wo.filters || {};
-  if (f.cleaned) chips.push(`<span class="chip">Filters cleaned: ${esc(f.cleaned)}${f.amount ? ' ('+esc(f.amount)+')' : ''}</span>`);
-  if (chips.length) h += `<div class="chips">${chips.join('')}</div>`;
   if (wo.repairs) h += `<div class="kv"><b>Repairs/parts:</b> ${esc(wo.repairs)}</div>`;
   return h;
 }
