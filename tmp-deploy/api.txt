@@ -1,0 +1,500 @@
+/**
+ * Server API called from the PWA (via doPost JSON) and the HTML views
+ * (via google.script.run).
+ */
+
+// ---------- Tech view ----------
+
+function apiGetRoute(tech, day) {
+  if (TECHS.indexOf(tech) < 0) throw new Error('Unknown tech: ' + tech);
+  if (DAYS.indexOf(day) < 0) throw new Error('Unknown day: ' + day);
+
+  const stops = readTable_('Routes')
+    .filter(function (r) { return r.Tech === tech && r.Day === day; })
+    .sort(function (a, b) { return a.Order - b.Order; });
+
+  // Mark stops already logged today so techs see progress.
+  const todayKey = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const doneToday = {};
+  readTable_('VisitLog').forEach(function (v) {
+    const vDate = Utilities.formatDate(new Date(v.Timestamp), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    if (vDate === todayKey && v.Status !== 'Rejected') doneToday[v.Customer + '|' + v.Address] = v.Status;
+  });
+
+  return stops.map(function (s) {
+    return {
+      order: s.Order, customer: s.Customer, address: s.Address,
+      lat: s.Lat, lng: s.Lng,
+      status: doneToday[s.Customer + '|' + s.Address] || null
+    };
+  });
+}
+
+// ---------- Prices ----------
+// Source of truth: the Prices tab. Office edits prices there — no deploy needed.
+// Keys are stable ids; the future QuickBooks line-item automation maps them to
+// QBO service items (see field-app.md).
+
+function apiGetPrices() {
+  return { items: getPrices_() };
+}
+
+function getPrices_() {
+  return readTable_('Prices').map(function (p) {
+    return {
+      key: String(p.Key), label: String(p.Label), unit: String(p.Unit),
+      price: Math.round((Number(p.Price) || 0) * 100) / 100
+    };
+  });
+}
+
+/**
+ * payload: {tech, day, customer, address, services:[], noteToCustomer,
+ *           internalNote, skipped, skipReason, photos:[{name,mimeType,dataBase64}],
+ *           workOrder: {                       // digitized paper work order
+ *             timeIn, timeOut,                 // ISO strings (optional)
+ *             water: {arriveLevel, leftLevel, pressureIn, pressureOut, airTemp, waterTemp},
+ *             readings: {ch, tc, fc, ph, alk, cya, salt, phos},
+ *             chems: {priceKey: qty, ...},     // nonzero quantities only
+ *             equipment: {name: 'E'|'L'|'M'|'H', ...},
+ *             filters: {cleaned: 'Y'|'N'|null, amount: 'L'|'M'|'H'|null},
+ *             repairs: '', custChems: bool}}
+ * Legacy payloads with {readings:{pH,..}, chemicals:'text'} still work.
+ */
+function apiSubmitVisit(payload) {
+  if (TECHS.indexOf(payload.tech) < 0) throw new Error('Unknown tech.');
+  const visitId = 'V' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+  const now = new Date();
+
+  const photoLinks = (payload.photos || []).map(function (p, i) {
+    const folder = customerPhotoFolder_(payload.customer);
+    const stamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const blob = Utilities.newBlob(
+      Utilities.base64Decode(p.dataBase64), p.mimeType || 'image/jpeg',
+      stamp + ' ' + payload.customer + ' ' + (i + 1) + '.jpg');
+    const file = folder.createFile(blob);
+    return file.getUrl();
+  });
+
+  const status = payload.skipped ? 'Skipped' : 'Pending';
+  const services = payload.skipped ? ('UNABLE TO SERVICE: ' + (payload.skipReason || ''))
+                                   : (payload.services || []).join(', ');
+
+  const wo = payload.workOrder || null;
+  let readings, chemicals = payload.chemicals || '', chemCharge = 0;
+
+  // Arrival GPS is only useful if it can be checked against where the pool
+  // actually is, so measure it against that stop's stored coordinates and keep
+  // the distance with the visit. Computed here, never taken from the phone.
+  let gpsFt = '';
+  if (wo && wo.arrival && wo.arrival.lat != null && wo.arrival.lng != null) {
+    const stop = readTable_('Routes').filter(function (r) {
+      return String(r.Customer).trim() === String(payload.customer).trim() &&
+             String(r.Address).trim() === String(payload.address).trim() && r.Lat && r.Lng;
+    })[0];
+    if (stop) {
+      gpsFt = Math.round(hav_(Number(stop.Lat), Number(stop.Lng),
+                              Number(wo.arrival.lat), Number(wo.arrival.lng)) * 5280);
+    }
+  }
+
+  if (wo) {
+    readings = woReadingsSummary_(wo);
+    // Chemical charge is computed HERE, from the Prices tab, never trusted
+    // from the client. Rounded per line, then summed.
+    const priceMap = {};
+    getPrices_().forEach(function (p) { priceMap[p.key] = p; });
+    const lines = [];
+    Object.keys(wo.chems || {}).forEach(function (k) {
+      const qty = Number(wo.chems[k]) || 0;
+      if (qty <= 0) return;
+      const p = priceMap[k];
+      if (p) {
+        chemCharge += Math.round(qty * p.price * 100) / 100;
+        lines.push(qty + ' ' + p.unit + ' ' + p.label);
+      } else {
+        lines.push(qty + ' ' + k + ' (unknown item — not priced)');
+      }
+    });
+    chemCharge = Math.round(chemCharge * 100) / 100;
+    if (wo.custChems) chemCharge = 0;
+    chemicals = lines.join(', ') + (wo.custChems && lines.length ? ' — customer\'s own chemicals, no charge' : '');
+  } else {
+    readings = payload.readings
+      ? Object.keys(payload.readings)
+          .filter(function (k) { return payload.readings[k] !== '' && payload.readings[k] != null; })
+          .map(function (k) { return k + ': ' + payload.readings[k]; }).join(', ')
+      : '';
+  }
+
+  getSheet_('VisitLog').appendRow([
+    visitId, now, payload.tech, payload.day, payload.customer, payload.address,
+    services, readings, chemicals, payload.noteToCustomer || '',
+    payload.internalNote || '', photoLinks.join('\n'), status, '', '', '', '', '',
+    wo ? JSON.stringify(wo) : '', chemCharge,
+    wo && wo.arrival && wo.arrival.at ? new Date(wo.arrival.at) : '',
+    wo && wo.departedAt ? new Date(wo.departedAt) : '',
+    gpsFt
+  ]);
+
+  return { visitId: visitId, status: status, photos: photoLinks.length,
+           chemCharge: chemCharge, gpsFt: gpsFt };
+}
+
+/** Human-readable summary of work-order readings for the Readings column/email. */
+function woReadingsSummary_(wo) {
+  const r = wo.readings || {}, w = wo.water || {};
+  const labels = { ch: 'CH', tc: 'TC', fc: 'FC', ph: 'pH', alk: 'Alk', cya: 'CYA', salt: 'Salt', phos: 'Phosphates' };
+  const parts = [];
+  Object.keys(labels).forEach(function (k) {
+    if (r[k] !== '' && r[k] != null) parts.push(labels[k] + ': ' + r[k]);
+  });
+  if (w.arriveLevel) parts.push('Level in/out: ' + w.arriveLevel + '/' + (w.leftLevel || '-'));
+  if (w.pressureIn || w.pressureOut) parts.push('PSI in/out: ' + (w.pressureIn || '-') + '/' + (w.pressureOut || '-'));
+  if (w.airTemp) parts.push('Air: ' + w.airTemp + '°');
+  if (w.waterTemp) parts.push('Water: ' + w.waterTemp + '°');
+  return parts.join(', ');
+}
+
+function customerPhotoFolder_(customer) {
+  const root = DriveApp.getFolderById(PROPS.getProperty('PHOTOS_FOLDER_ID'));
+  const safe = customer.replace(/[\\/:*?"<>|]/g, '-');
+  const it = root.getFoldersByName(safe);
+  return it.hasNext() ? it.next() : root.createFolder(safe);
+}
+
+// ---------- Office view ----------
+
+function apiOfficeState(pin) {
+  requirePin_(pin);
+  const custByKey = {};
+  readTable_('Customers').forEach(function (c) {
+    custByKey[c.Customer + '|' + c.Address] = c;
+  });
+  const pending = readTable_('VisitLog').filter(function (v) {
+    return v.Status === 'Pending' || v.Status === 'Skipped' || v.Status === 'Error';
+  });
+  return {
+    qbConnected: qbIsConnected(),
+    qbAuthUrl: qbIsConnected() ? null : qbGetAuthorizationUrl(),
+    pending: pending.map(function (v) {
+      const cust = custByKey[v.Customer + '|' + v.Address];
+      let wo = null;
+      try { wo = v.WorkOrder ? JSON.parse(v.WorkOrder) : null; } catch (e) {}
+      return {
+        visitId: v.VisitId,
+        when: Utilities.formatDate(new Date(v.Timestamp), Session.getScriptTimeZone(), 'EEE MMM d h:mm a'),
+        tech: v.Tech, customer: v.Customer, address: v.Address,
+        services: v.Services, readings: v.Readings, chemicals: v.Chemicals,
+        noteToCustomer: v.NoteToCustomer, internalNote: v.InternalNote,
+        photos: v.Photos ? v.Photos.split('\n') : [],
+        status: v.Status, error: v.Error,
+        workOrder: wo,
+        chemCharge: Math.round((Number(v.ChemCharge) || 0) * 100) / 100,
+        gpsFt: (v.GpsFt === '' || v.GpsFt == null) ? null : Number(v.GpsFt),
+        rate: cust ? (Number(cust.Rate) || 0) : 0
+      };
+    })
+  };
+}
+
+/**
+ * Approve a visit. options: {invoice:bool, email:bool}
+ * Charges/invoices happen ONLY here — never on tech submission.
+ * FUTURE (billing automation): qbCreateInvoice currently bills the flat Rate;
+ * when we automate chemical billing, add one QBO line per entry in the visit's
+ * WorkOrder.chems using the Prices tab keys → QBO items. ChemCharge already
+ * holds the computed total, so the invoice amount is Rate + ChemCharge.
+ */
+function apiApproveVisit(pin, visitId, options) {
+  requirePin_(pin);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = getSheet_('VisitLog');
+    const visits = readTable_('VisitLog');
+    const v = visits.filter(function (x) { return x.VisitId === visitId; })[0];
+    if (!v) throw new Error('Visit not found: ' + visitId);
+    if (v.Status === 'Approved') throw new Error('Already approved.');
+
+    const customer = readTable_('Customers').filter(function (c) {
+      return c.Customer === v.Customer && c.Address === v.Address;
+    })[0];
+
+    const result = { invoiceId: null, emailed: false, warnings: [] };
+
+    if (options.invoice) {
+      if (!customer) throw new Error('Customer not found in Customers tab.');
+      if (!customer.Rate) throw new Error('No Rate set for ' + v.Customer + ' — fill the Rate column in the Customers tab.');
+      result.invoiceId = qbCreateInvoice(v, customer);
+      sh.getRange(v._row, 14).setValue(result.invoiceId); // InvoiceId
+    }
+
+    if (options.email) {
+      if (!customer || !customer.Email) {
+        result.warnings.push('No email on file for ' + v.Customer + ' — confirmation not sent.');
+      } else {
+        sendVisitEmail(v, customer);
+        sh.getRange(v._row, 17).setValue(new Date()); // EmailSentAt
+        result.emailed = true;
+      }
+    }
+
+    sh.getRange(v._row, 13).setValue('Approved');   // Status
+    sh.getRange(v._row, 15).setValue('office');     // ApprovedBy
+    sh.getRange(v._row, 16).setValue(new Date());   // ApprovedAt
+    sh.getRange(v._row, 18).setValue('');           // clear Error
+    return result;
+  } catch (err) {
+    markVisitError_(visitId, String(err.message || err));
+    throw err;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function apiRejectVisit(pin, visitId, reason) {
+  requirePin_(pin);
+  const v = readTable_('VisitLog').filter(function (x) { return x.VisitId === visitId; })[0];
+  if (!v) throw new Error('Visit not found.');
+  const sh = getSheet_('VisitLog');
+  sh.getRange(v._row, 13).setValue('Rejected');
+  sh.getRange(v._row, 18).setValue(reason || '');
+  return true;
+}
+
+function markVisitError_(visitId, msg) {
+  try {
+    const v = readTable_('VisitLog').filter(function (x) { return x.VisitId === visitId; })[0];
+    if (v) {
+      const sh = getSheet_('VisitLog');
+      sh.getRange(v._row, 13).setValue('Error');
+      sh.getRange(v._row, 18).setValue(msg);
+    }
+  } catch (e) { /* best effort */ }
+}
+/**
+ * APT Field App — customer management.
+ *
+ * The office view's Customers panel: list who is on the routes, fix a rate or an
+ * email, and take someone off the routes. Everything here is office-PIN gated and
+ * runs under the script lock, because all of it writes.
+ *
+ *   apiListCustomers(pin)                        → every customer, their route
+ *                                                  days, rate/email, and whether
+ *                                                  visits of theirs are waiting
+ *   apiUpdateCustomer(pin, customer, address, f) → patch rate/email/phone/QBO id
+ *   apiRemoveCustomer(pin, customer, address)    → delete their Routes rows,
+ *                                                  renumber the days they were on,
+ *                                                  mark the customer inactive
+ *
+ * Removal never deletes the Customers row and never touches VisitLog: history and
+ * photos survive, and a customer who comes back is re-added through the normal
+ * "Add a customer" flow, which re-places them optimally against the routes as
+ * they stand by then.
+ */
+
+/** Statuses that mean a visit is still waiting on the office. */
+const OPEN_VISIT_STATUSES = ['Pending', 'Skipped', 'Error'];
+
+function custKey_(customer, address) {
+  return String(customer || '').trim() + '|' + String(address || '').trim();
+}
+
+/** Column number (1-based) of a header on a sheet, or 0. */
+function colOf_(sh, header) {
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  return head.indexOf(header) + 1;
+}
+
+/**
+ * Every customer with their route days and anything the office needs to act on.
+ * Also reports orphan route stops — Routes rows with no matching Customers row,
+ * which bill at $0 and email nobody, so they are worth surfacing rather than
+ * leaving to be discovered at invoice time.
+ */
+function apiListCustomers(pin) {
+  requirePin_(pin);
+
+  const groups = routeGroups_();
+  const stopsByCustomer = {};
+  Object.keys(groups).forEach(function (k) {
+    groups[k].stops.forEach(function (s) {
+      const key = custKey_(s.customer, s.address);
+      if (!stopsByCustomer[key]) stopsByCustomer[key] = [];
+      stopsByCustomer[key].push({ tech: groups[k].tech, day: groups[k].day, order: s.order });
+    });
+  });
+
+  const openVisits = {};
+  readTable_('VisitLog').forEach(function (v) {
+    if (OPEN_VISIT_STATUSES.indexOf(String(v.Status)) < 0) return;
+    const key = custKey_(v.Customer, v.Address);
+    openVisits[key] = (openVisits[key] || 0) + 1;
+  });
+
+  const seen = {};
+  const customers = readTable_('Customers').map(function (c) {
+    const customer = String(c.Customer || '').trim();
+    const address = String(c.Address || '').trim();
+    const key = custKey_(customer, address);
+    seen[key] = true;
+    const days = (stopsByCustomer[key] || []).sort(function (a, b) {
+      const d = DAYS.indexOf(a.day) - DAYS.indexOf(b.day);
+      return d !== 0 ? d : a.tech.localeCompare(b.tech);
+    });
+    const rate = Number(c.Rate);
+    return {
+      customer: customer,
+      address: address,
+      email: String(c.Email || '').trim(),
+      phone: String(c.Phone || '').trim(),
+      rate: isFinite(rate) && c.Rate !== '' ? rate : null,
+      qbCustomerId: String(c.QBCustomerId || '').trim(),
+      // Active is a label the office sets; it does not by itself stop a visit.
+      // Removing the Routes rows is what does that, and this is set with it.
+      // Sheets turns a written 'FALSE' into a boolean, and `c.Active || ''`
+      // would read that back as blank - i.e. active. Check both shapes.
+      active: c.Active !== false && String(c.Active).toUpperCase() !== 'FALSE',
+      days: days,
+      visits: days.length,
+      openVisits: openVisits[key] || 0
+    };
+  });
+
+  // Route stops with no Customers row: they bill at $0 and email nobody.
+  const orphans = [];
+  Object.keys(stopsByCustomer).forEach(function (key) {
+    if (seen[key]) return;
+    const parts = key.split('|');
+    orphans.push({ customer: parts[0], address: parts[1], days: stopsByCustomer[key] });
+  });
+
+  customers.sort(function (a, b) { return a.customer.localeCompare(b.customer); });
+  orphans.sort(function (a, b) { return a.customer.localeCompare(b.customer); });
+  return { customers: customers, orphans: orphans };
+}
+
+/**
+ * Patch a customer's billing details. Only the fields passed are written, so the
+ * office can fix a rate without clearing an email.
+ *
+ * fields: {email, phone, rate, qbCustomerId} — any subset. rate '' clears it.
+ */
+function apiUpdateCustomer(pin, customer, address, fields) {
+  requirePin_(pin);
+  const f = fields || {};
+  const key = custKey_(customer, address);
+
+  let rate;
+  if (f.rate !== undefined) {
+    if (f.rate === '' || f.rate === null) {
+      rate = '';
+    } else {
+      rate = Number(f.rate);
+      if (!isFinite(rate) || rate < 0) throw new Error('Rate must be a number (no $ sign).');
+    }
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = getSheet_('Customers');
+    const row = readTable_('Customers').filter(function (c) {
+      return custKey_(c.Customer, c.Address) === key;
+    })[0];
+    if (!row) throw new Error('No Customers row for ' + customer + '.');
+
+    const writes = [];
+    if (f.email !== undefined) writes.push(['Email', String(f.email).trim()]);
+    if (f.phone !== undefined) writes.push(['Phone', String(f.phone).trim()]);
+    if (f.qbCustomerId !== undefined) writes.push(['QBCustomerId', String(f.qbCustomerId).trim()]);
+    if (rate !== undefined) writes.push(['Rate', rate]);
+
+    writes.forEach(function (w) {
+      const col = colOf_(sh, w[0]);
+      if (col) sh.getRange(row._row, col).setValue(w[1]);
+    });
+
+    return { updated: writes.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Take a customer off the routes.
+ *
+ * Deletes every Routes row for them (a twice-weekly customer has two), renumbers
+ * each day they were on so the techs' stop numbers stay 1…N, and marks the
+ * Customers row inactive. The Customers row itself stays: VisitLog references it
+ * by name and address, and deleting it would break approval of any visit of
+ * theirs still in the queue.
+ *
+ * Refuses while they have visits waiting, rather than leaving the office with a
+ * queue entry it can no longer invoice.
+ */
+function apiRemoveCustomer(pin, customer, address) {
+  requirePin_(pin);
+  const name = String(customer || '').trim();
+  const addr = String(address || '').trim();
+  if (!name || !addr) throw new Error('Customer and address are required.');
+  const key = custKey_(name, addr);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const open = readTable_('VisitLog').filter(function (v) {
+      return custKey_(v.Customer, v.Address) === key &&
+             OPEN_VISIT_STATUSES.indexOf(String(v.Status)) >= 0;
+    });
+    if (open.length) {
+      throw new Error(name + ' has ' + open.length + ' visit' + (open.length > 1 ? 's' : '') +
+        ' still waiting in the queue. Approve or reject ' +
+        (open.length > 1 ? 'those' : 'that') + ' first, then remove them.');
+    }
+
+    const groups = routeGroups_();
+    const hits = [];
+    Object.keys(groups).forEach(function (k) {
+      groups[k].stops.forEach(function (s) {
+        if (custKey_(s.customer, s.address) === key) {
+          hits.push({ row: s.row, tech: groups[k].tech, day: groups[k].day });
+        }
+      });
+    });
+    if (!hits.length) throw new Error(name + ' is not on any route.');
+
+    // Delete bottom-up: every deletion shifts the rows below it.
+    const sh = getSheet_('Routes');
+    hits.slice().sort(function (a, b) { return b.row - a.row; })
+        .forEach(function (h) { sh.deleteRow(h.row); });
+    SpreadsheetApp.flush();
+
+    // Renumber each day they were on, so no gaps reach the techs.
+    const touched = {};
+    hits.forEach(function (h) { touched[h.tech + '|' + h.day] = h; });
+    Object.keys(touched).forEach(function (k) {
+      renumberDay_(touched[k].tech, touched[k].day, null, null);
+    });
+
+    // Mark inactive; keep the row so history and any later re-add still resolve.
+    const custSheet = getSheet_('Customers');
+    const custRow = readTable_('Customers').filter(function (c) {
+      return custKey_(c.Customer, c.Address) === key;
+    })[0];
+    let flagged = false;
+    if (custRow) {
+      const col = colOf_(custSheet, 'Active');
+      if (col) { custSheet.getRange(custRow._row, col).setValue('FALSE'); flagged = true; }
+    }
+
+    return {
+      removed: hits.length,
+      days: hits.map(function (h) { return h.tech + ' ' + h.day; }),
+      markedInactive: flagged
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
