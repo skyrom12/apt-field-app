@@ -89,6 +89,15 @@
   .empty{text-align:center;color:var(--muted);padding:40px 0}
   /* .warn was used by the billing line but never defined — it rendered as plain text */
   .warn{color:var(--warn);font-weight:600}
+  /* arrival bar */
+  .arrive{display:flex;align-items:center;gap:12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px}
+  .arrive.on{background:#e8f5e9;border-color:#a5d6a7}
+  .arrive button{flex:1;padding:14px;border:0;border-radius:10px;font-weight:700;font-size:1.02rem;background:var(--navy);color:#fff;cursor:pointer}
+  .arrive .at{font-weight:700}
+  .arrive .sub2{font-size:.8rem;color:var(--muted)}
+  .arrive .gps{font-size:.78rem;color:var(--muted);margin-top:2px}
+  .arrive .gps.bad{color:var(--warn)}
+
   /* add-customer form */
   .addhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
   .addhead h2{margin:0;font-size:1rem}
@@ -164,7 +173,59 @@ async function api(action, params){
 
 /* ---------------- TECH VIEW ---------------- */
 let state = { tech: readStore('apt.tech'), day: defaultDay(), route: [], stop: null, photos: [],
-              prices: [], timeIn: null };
+              prices: [], timeIn: null, arrival: null, timer: null };
+
+/** Phone GPS, best effort. Never blocks the visit: if the tech denies the
+ *  prompt or there is no fix in 12s we carry on with the time only. */
+function getFix(){
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve(null);
+    let done = false;
+    const finish = v => { if (!done){ done = true; resolve(v); } };
+    setTimeout(() => finish(null), 12000);
+    navigator.geolocation.getCurrentPosition(
+      p => finish({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6),
+                    accuracy: Math.round(p.coords.accuracy) }),
+      () => finish(null),
+      { enableHighAccuracy: true, timeout: 11000, maximumAge: 0 });
+  });
+}
+
+function clockTime(iso){
+  try { return new Date(iso).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}); }
+  catch(e){ return ''; }
+}
+
+/** The tech taps "I'm here" on arrival: stamps the time and grabs a GPS fix. */
+async function markArrived(){
+  const btn = document.querySelector('.arrive button');
+  if (btn){ btn.disabled = true; btn.textContent = 'Getting location\u2026'; }
+  const at = new Date().toISOString();
+  const fix = await getFix();
+  state.arrival = Object.assign({ at: at }, fix || { lat: null, lng: null, accuracy: null });
+  state.timeIn = at;
+  renderArrival();
+  if (state.timer) clearInterval(state.timer);
+  state.timer = setInterval(renderArrival, 30000);
+}
+
+function renderArrival(){
+  const el = $('arriveBar');
+  if (!el) return;
+  const a = state.arrival;
+  if (!a){
+    el.className = 'arrive';
+    el.innerHTML = '<button onclick="markArrived()">I\u2019m here \u2014 start visit</button>';
+    return;
+  }
+  const mins = Math.max(0, Math.round((Date.now() - new Date(a.at)) / 60000));
+  const gps = (a.lat != null)
+    ? '<div class="gps">GPS recorded \u00b7 \u00b1' + a.accuracy + ' m</div>'
+    : '<div class="gps bad">No GPS \u2014 time still recorded</div>';
+  el.className = 'arrive on';
+  el.innerHTML = '<div><div class="at">Arrived ' + clockTime(a.at) + '</div>' +
+                 '<div class="sub2">' + mins + ' min on site</div>' + gps + '</div>';
+}
 function defaultDay(){ const d = new Date().getDay(); return (d>=1&&d<=5) ? DAYS[d-1] : 'Mon'; }
 
 function loadPrices(){
@@ -210,7 +271,12 @@ function loadRoute(){
 function openStop(order){
   state.stop = state.route.find(s => s.order === order);
   state.photos = [];
-  state.timeIn = new Date().toISOString();   // on-site clock starts when the stop is opened
+  // Opening the screen is not arriving. The clock starts when the tech taps
+  // "I'm here"; if they never do, submit falls back to the time the stop was
+  // opened so a visit is never left without a time at all.
+  state.timeIn = new Date().toISOString();
+  state.arrival = null;
+  if (state.timer){ clearInterval(state.timer); state.timer = null; }
   render();
 }
 
@@ -235,6 +301,7 @@ function renderForm(){
     <button class="btn back" onclick="state.stop=null;render()">&larr; Route</button>
     <div class="card">
       <h2>${s.order}. ${esc(s.customer)}</h2><div class="addr">${esc(s.address)}</div>
+      <div id="arriveBar"></div>
 
       <div class="svc">${SERVICES.map(x=>`<label><input type="checkbox" value="${x}">${x}</label>`).join('')}</div>
 
@@ -262,6 +329,7 @@ function renderForm(){
       <button class="btn ghost" onclick="submitVisit(true)">Unable to service…</button>
     </div>`;
   $('photos').onchange = handlePhotos;
+  renderArrival();
 }
 
 function bump(btn, d){
@@ -328,8 +396,12 @@ function submitVisit(skipped){
   const readings = {};
   READING_FIELDS.forEach(([k]) => { const v = $('r_'+k).value; if (v !== '') readings[k] = v; });
 
+  const departedAt = new Date().toISOString();
   const workOrder = {
-    timeIn: state.timeIn, timeOut: new Date().toISOString(),
+    timeIn: (state.arrival && state.arrival.at) || state.timeIn,
+    timeOut: departedAt,
+    arrival: state.arrival,          // {at, lat, lng, accuracy} or null if not tapped
+    departedAt: departedAt,
     readings: readings,
     chems: chems,
     repairs: $('repairs').value,
@@ -391,7 +463,20 @@ function officeWorkOrder(v){
   let h = '';
   if (wo.timeIn && wo.timeOut){
     const mins = Math.max(0, Math.round((new Date(wo.timeOut)-new Date(wo.timeIn))/60000));
-    h += `<div class="kv"><b>On site:</b> ${mins} min</div>`;
+    const a = wo.arrival;
+    const stamped = a && a.at ? 'arrived' : 'opened the stop at';
+    h += `<div class="kv"><b>On site:</b> ${clockTime(wo.timeIn)} \u2192 ${clockTime(wo.timeOut)} (${mins} min)` +
+         (a && a.at ? '' : ' <span class="warn">\u2014 tech never tapped "I\u2019m here", so this is when they ' + stamped + ' the screen</span>') +
+         `</div>`;
+  }
+  const a = wo.arrival;
+  if (a && a.lat != null){
+    const near = (v.gpsFt == null) ? ''
+      : (v.gpsFt <= 500 ? ` \u2014 <b>${v.gpsFt} ft from the address \u2713</b>`
+                        : ` \u2014 <span class="warn">${v.gpsFt} ft from the address</span>`);
+    h += `<div class="kv"><b>GPS:</b> <a href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener">${a.lat}, ${a.lng}</a> \u00b1${a.accuracy} m${near}</div>`;
+  } else if (a) {
+    h += `<div class="kv"><b>GPS:</b> <span class="warn">not captured</span></div>`;
   }
   if (wo.repairs) h += `<div class="kv"><b>Repairs/parts:</b> ${esc(wo.repairs)}</div>`;
   return h;
