@@ -423,7 +423,12 @@ function submitVisit(skipped){
 }
 
 /* ---------------- OFFICE VIEW ---------------- */
-let pin = readStore('apt.pin');
+// The office PIN lives for this tab only (sessionStorage), as the legacy Office view had it.
+// localStorage kept it on the device until someone cleared it; drop any copy left there.
+function readPin(){ try { return sessionStorage.getItem('apt.pin') || ''; } catch(e){ return ''; } }
+function writePin(v){ try { sessionStorage.setItem('apt.pin', v); } catch(e){} }
+try { localStorage.removeItem('apt.pin'); } catch(e){}
+let pin = readPin();
 let addRendered = false;   // the add-customer card is drawn once per session
 let placement = null;      // last suggestPlacement result
 let chosenSlot = 0;        // which suggestion is selected
@@ -432,7 +437,7 @@ function askPin(){
   $('addwrap').innerHTML = ''; addRendered = false;
   $('app').innerHTML = '<div class="card"><p>Office PIN:</p><input id="pin" type="password" autocomplete="off" style="padding:10px;border:1px solid var(--line);border-radius:8px">' +
     ' <button class="btn primary" id="pinbtn" style="width:auto;padding:10px 18px">Open</button></div>';
-  $('pinbtn').onclick = function(){ pin = $('pin').value; writeStore('apt.pin', pin); loadOffice(); };
+  $('pinbtn').onclick = function(){ pin = $('pin').value; writePin(pin); loadOffice(); };
   $('pin').addEventListener('keydown', function(e){ if (e.key === 'Enter') $('pinbtn').click(); });
   $('pin').focus();
 }
@@ -442,7 +447,7 @@ function loadOffice(){
   $('app').innerHTML = '<div class="empty">Loading…</div>';
   api('officeState', { pin: pin })
     .then(renderOffice)
-    .catch(e => { if(/PIN/.test(e.message)){ pin=''; writeStore('apt.pin',''); askPin(); toast('Wrong PIN'); } else $('app').innerHTML='<div class="err">'+esc(e.message)+'</div>'; });
+    .catch(e => { if(/PIN/.test(e.message)){ pin=''; writePin(''); askPin(); toast('Wrong PIN'); } else $('app').innerHTML='<div class="err">'+esc(e.message)+'</div>'; });
 }
 
 function officeBill(v){
