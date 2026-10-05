@@ -973,9 +973,13 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
    shows the right company immediately rather than last resort defaults; the network
    copy replaces it as soon as it lands. */
 function applyConfig(c){
-  if (!c) return;
-  CFG = Object.assign({}, CFG, c);
-  try { localStorage.setItem('apt.cfg', JSON.stringify(CFG)); } catch(e){}
+  // Merge only when given something; paint every time, so the first call with no
+  // cached config still puts the company's name on screen instead of leaving the
+  // subtitle blank.
+  if (c) {
+    CFG = Object.assign({}, CFG, c);
+    try { localStorage.setItem('apt.cfg', JSON.stringify(CFG)); } catch(e){}
+  }
   document.title = CFG.companyName + (IS_OFFICE ? ' — Office' : ' — Field App');
   const sub = $('subtitle'); if (sub) sub.textContent = CFG.companyName;
   $('title').textContent = IS_OFFICE ? 'Office' : 'Field App';
