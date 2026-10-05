@@ -142,17 +142,25 @@
 </style>
 </head>
 <body>
-<header><div><h1 id="title">APT Field App</h1><div class="sub">American Pool Techs</div></div><div id="hdr"></div></header>
+<header><div><h1 id="title">Field App</h1><div class="sub" id="subtitle"></div></div><div id="hdr"></div></header>
 <div class="wrap" id="addwrap"></div>
 <div class="wrap" id="app"><div class="spinner">Loading…</div></div>
 <div class="toast" id="toast"></div>
 
 <script>
 const API_URL = 'https://script.google.com/macros/s/AKfycbxCS8NbiIQIYNm4YBhIHMmuhn8jt0LMEKYJnx8sEU2IA8Q1-FeZ3GzVTpCb1kN1LQFIiQ/exec';
-const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
-const TECHS = ['Adam','Bradley','Nick','Zack'];
-const SERVICES = ['Brushed walls & steps','Vacuumed pool','Emptied baskets',
-                  'Balanced chemicals','Backwashed filter','Cleaned filter'];
+/* Who this company is, and how it works. Filled from getConfig at boot; these values
+   are the fallback until it arrives, so a cold start on a weak signal still draws the
+   right screen instead of an empty one. Nothing company-specific is decided here. */
+let CFG = {
+  companyName: 'American Pool Techs',
+  brandColor: '#0C1A35',
+  logoUrl: '',
+  days: ['Mon','Tue','Wed','Thu','Fri'],
+  techs: ['Adam','Bradley','Nick','Zack'],
+  services: ['Brushed walls & steps','Vacuumed pool','Emptied baskets',
+             'Balanced chemicals','Backwashed filter','Cleaned filter']
+};
 // Chemicals shown up front (the paper form's right-hand column); the rest sit
 // behind "More chemicals". Keys must match the Prices tab in APT Field Ops.
 const COMMON_CHEMS = ['tabs','shock_lb','acid_gal','alk_lb','stab_lb','ch_lb','salt_bag'];
@@ -265,7 +273,11 @@ function renderArrival(){
   el.innerHTML = '<div><div class="at">Arrived ' + clockTime(a.at) + '</div>' +
                  '<div class="sub2">' + mins + ' min on site</div>' + gps + '</div>';
 }
-function defaultDay(){ const d = new Date().getDay(); return (d>=1&&d<=5) ? DAYS[d-1] : 'Mon'; }
+/* Today, if the company works today; otherwise the first day they do work. */
+function defaultDay(){
+  const code = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date().getDay()];
+  return CFG.days.indexOf(code) >= 0 ? code : CFG.days[0];
+}
 
 function loadPrices(){
   const cached = readStore('apt.prices');
@@ -280,8 +292,8 @@ function render(){
   if (state.stop) return renderForm();
   let h = '<div class="pickers">' +
     '<select id="tech"><option value="">Who are you?</option>' +
-      TECHS.map(t=>`<option ${t===state.tech?'selected':''}>${t}</option>`).join('') + '</select>' +
-    '<select id="day">' + DAYS.map(d=>`<option ${d===state.day?'selected':''}>${d}</option>`).join('') + '</select></div>';
+      CFG.techs.map(t=>`<option ${t===state.tech?'selected':''}>${t}</option>`).join('') + '</select>' +
+    '<select id="day">' + CFG.days.map(d=>`<option ${d===state.day?'selected':''}>${d}</option>`).join('') + '</select></div>';
   if (!state.tech) { h += '<div class="spinner">Pick your name to see your route.</div>'; }
   else if (!state.route.length) { h += '<div class="spinner">Loading route…</div>'; }
   else {
@@ -342,7 +354,7 @@ function renderForm(){
       <h2>${s.order}. ${esc(s.customer)}</h2><div class="addr">${esc(s.address)}</div>
       <div id="arriveBar"></div>
 
-      <div class="svc">${SERVICES.map(x=>`<label><input type="checkbox" value="${x}">${x}</label>`).join('')}</div>
+      <div class="svc">${CFG.services.map(x=>`<label><input type="checkbox" value="${esc(x)}">${esc(x)}</label>`).join('')}</div>
 
       <div class="sect">Water tests</div>
       <div class="grid4">
@@ -956,8 +968,32 @@ async function cuRemove(el, key){
 
 /* ---------------- BOOT ---------------- */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+
+/* The company's own name, colour and lists. Cached so a cold start on a bad signal
+   shows the right company immediately rather than last resort defaults; the network
+   copy replaces it as soon as it lands. */
+function applyConfig(c){
+  if (!c) return;
+  CFG = Object.assign({}, CFG, c);
+  try { localStorage.setItem('apt.cfg', JSON.stringify(CFG)); } catch(e){}
+  document.title = CFG.companyName + (IS_OFFICE ? ' — Office' : ' — Field App');
+  const sub = $('subtitle'); if (sub) sub.textContent = CFG.companyName;
+  $('title').textContent = IS_OFFICE ? 'Office' : 'Field App';
+  if (CFG.brandColor) {
+    document.documentElement.style.setProperty('--navy', CFG.brandColor);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', CFG.brandColor);
+  }
+}
+
+try { applyConfig(JSON.parse(localStorage.getItem('apt.cfg') || 'null')); } catch(e){}
+applyConfig(null);   // paints the fallback company before the network answers
+
+api('getConfig', {})
+  .then(c => { applyConfig(c); if (!IS_OFFICE) render(); })
+  .catch(() => {});   // the cached or fallback config is already on screen
+
 if (IS_OFFICE) {
-  $('title').textContent = 'APT Office';
   loadOffice();
 } else {
   render();
