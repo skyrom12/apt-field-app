@@ -75,6 +75,9 @@
   .ophotos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
   .ophotos img{width:128px;height:128px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:var(--bg)}
   .ophotos .nothumb{display:inline-block;padding:4px 8px;text-decoration:underline;color:var(--navy)}
+  .linkbtn{background:none;border:0;color:var(--navy);text-decoration:underline;cursor:pointer;
+    font:inherit;padding:0 4px}
+  .linkbtn[disabled]{color:var(--muted);cursor:default}
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:var(--ink);color:#fff;padding:10px 18px;border-radius:99px;font-size:.9rem;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
   .toast.show{opacity:1}
   .spinner{text-align:center;color:var(--muted);padding:30px 0}
@@ -213,30 +216,42 @@ function getFix(){
 }
 
 /**
- * One photo in the office view. A thumbnail when Drive will serve one, and a plain
- * "photo N" link when it will not - which is the case until enablePhotoLinkSharing()
- * has been run, and for anything the app account cannot share. The anchor wraps both,
- * so clicking always opens the full file either way.
+ * One photo in the office view, as a link that expires. The link opens the image
+ * through the app, which checks the signature and the expiry first - Drive itself
+ * stays private, so there is no public URL to leak.
+ *
+ * Thumbnails are not in this markup because fetching them needs the office PIN; they
+ * are swapped in by showPhotos() when the office asks.
  */
 function photoTile(url, j){
-  const id = driveId(url);
-  const label = 'photo ' + (j + 1);
-  if (!id) return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
-  const fallback = "this.replaceWith(Object.assign(document.createElement('span')," +
-                   "{className:'nothumb',textContent:'" + label + "'}))";
-  return `<a href="${url}" target="_blank" rel="noopener" title="Open full size">` +
-         `<img src="https://drive.google.com/thumbnail?id=${id}&sz=w256" alt="Photo ${j+1}"` +
-         ` loading="lazy" onerror="${fallback}"></a>`;
+  return `<a href="${url}" target="_blank" rel="noopener">photo ${j + 1}</a>`;
 }
 
-/** File id out of a Drive URL, so the office view can show a thumbnail rather than
- *  a bare link. Mirrors driveIdFrom_ in the back end's Code.gs. */
-function driveId(url){
-  const parts = String(url || '').split('/d/');
-  if (parts.length < 2) return '';
-  const id = parts[1].split('/')[0].split('?')[0];
-  return id.length >= 20 ? id : '';
+/**
+ * Fetch and show the thumbnails for one visit. One call rather than one per photo,
+ * and only when asked, because each round trip to Apps Script is a couple of seconds
+ * and a busy queue would otherwise make a dozen of them before the office looked at
+ * anything.
+ */
+async function showPhotos(visitId, btn){
+  const box = document.getElementById('ph_' + visitId);
+  if (!box) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Loading\u2026';
+  try {
+    const photos = await api('visitPhotos', { pin: pin, visitId: visitId });
+    box.innerHTML = photos.map((p, j) => p.thumb
+      ? `<a href="${p.url}" target="_blank" rel="noopener" title="Open full size"><img src="${p.thumb}" alt="Photo ${j + 1}"></a>`
+      : `<a href="${p.url}" target="_blank" rel="noopener">photo ${j + 1}</a>`).join('');
+    btn.remove();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = label;
+    toast(e.message);
+  }
 }
+
 
 function clockTime(iso){
   try { return new Date(iso).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}); }
@@ -601,7 +616,8 @@ function renderOffice(st){
       ${v.noteToCustomer ? `<div class="kv"><b>Note to customer:</b> ${esc(v.noteToCustomer)}</div>` : ''}
       ${v.internalNote ? `<div class="kv"><b>Internal:</b> ${esc(v.internalNote)}</div>` : ''}
       ${v.photos.length ? `<div class="kv"><b>Photos (${v.photos.length}):</b>
-        <div class="ophotos">${v.photos.map((p,j)=>photoTile(p,j)).join('')}</div></div>` : ''}
+        <button class="linkbtn" onclick="showPhotos('${v.visitId}', this)">Show photos</button>
+        <div class="ophotos" id="ph_${v.visitId}">${v.photos.map((p,j)=>photoTile(p,j)).join('')}</div></div>` : ''}
       ${officeBill(v)}
       ${v.error ? `<div class="err">Last error: ${esc(v.error)}</div>` : ''}
       <div class="actions">
