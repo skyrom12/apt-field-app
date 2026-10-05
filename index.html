@@ -71,6 +71,12 @@
     border:1px solid var(--line);background:#fff;color:var(--warn);font-size:1rem;line-height:1;
     font-weight:700;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.25)}
   .photocount{font-size:.82rem;color:var(--muted);margin-top:6px}
+  .who{font-weight:700;margin-right:8px}
+  .techlink{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .techlink b{min-width:84px}
+  .techlink input{flex:1;min-width:220px;font-size:.82rem;padding:6px 8px;border:1px solid var(--line);
+    border-radius:8px;background:var(--bg);color:var(--muted)}
+  .techlink .btn{width:auto;padding:6px 14px;margin:0}
   /* office view */
   .ophotos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
   .ophotos img{width:128px;height:128px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:var(--bg)}
@@ -172,6 +178,22 @@ const READING_FIELDS = [
   ['alk','Alkalinity'],['cya','Stabilizer'],['salt','Salt'],['phos','Phosphates']
 ];
 const IS_OFFICE = new URLSearchParams(location.search).get('view') === 'office';
+
+/* A setup link carries ?t=<token>. Keep it, then strip it from the address bar so it
+   is not sitting in a screenshot or shared by someone copying the URL - the phone has
+   it now and will not need the link again. */
+(function captureSetupToken(){
+  const t = new URLSearchParams(location.search).get('t');
+  if (!t) return;
+  try { localStorage.setItem('apt.token', t); } catch(e){}
+  try {
+    const u = new URL(location.href);
+    u.searchParams.delete('t');
+    history.replaceState(null, '', u.toString());
+  } catch(e){}
+})();
+
+function techToken(){ try { return localStorage.getItem('apt.token') || ''; } catch(e){ return ''; } }
 
 function readStore(k){ try { return localStorage.getItem(k) || ''; } catch(e){ return ''; } }
 function writeStore(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
@@ -309,6 +331,12 @@ function render(){
     '<select id="tech"><option value="">Who are you?</option>' +
       CFG.techs.map(t=>`<option ${t===state.tech?'selected':''}>${t}</option>`).join('') + '</select>' +
     '<select id="day">' + CFG.days.map(d=>`<option ${d===state.day?'selected':''}>${d}</option>`).join('') + '</select></div>';
+  if (knownTech()) {
+    // This phone is set up for one technician, so the picker is noise. The day stays
+    // selectable: covering a colleague's round is a real thing that happens.
+    $('hdr').innerHTML = `<div class="who">${esc(knownTech())}</div>` +
+      '<select id="day">' + CFG.days.map(d=>`<option ${d===state.day?'selected':''}>${d}</option>`).join('') + '</select>';
+  }
   if (!state.tech) { h += '<div class="spinner">Pick your name to see your route.</div>'; }
   else if (!state.route.length) { h += '<div class="spinner">Loading route…</div>'; }
   else {
@@ -329,7 +357,7 @@ function render(){
 function loadRoute(){
   state.route = []; render();
   if (!state.tech) return;
-  api('getRoute', { tech: state.tech, day: state.day })
+  api('getRoute', { tech: state.tech, day: state.day, token: techToken() })
     .then(r => { state.route = r; render(); })
     .catch(e => toast(e.message));
 }
@@ -511,7 +539,7 @@ function submitVisit(skipped){
   };
 
   $('submit').disabled = true; $('submit').textContent = 'Sending…';
-  api('submitVisit', { payload: {
+  api('submitVisit', { token: techToken(), payload: {
       tech: state.tech, day: state.day,
       customer: state.stop.customer, address: state.stop.address,
       services: services,
@@ -595,6 +623,42 @@ function officeWorkOrder(v){
   return h;
 }
 
+/**
+ * The technicians' setup links. Fetched on demand rather than with the queue: each
+ * one is an identity, so they are not worth minting or putting on screen until the
+ * office actually wants to send one.
+ */
+async function loadTechLinks(btn){
+  const box = $('techlinks');
+  btn.disabled = true;
+  btn.textContent = 'Loading\u2026';
+  try {
+    const links = await api('techLinks', { pin: pin });
+    box.innerHTML = links.map(l => `<div class="techlink">
+      <b>${esc(l.tech)}</b>
+      <input readonly value="${esc(l.url)}" onclick="this.select()">
+      <button class="btn ghost" onclick="copyLink(this)">Copy</button></div>`).join('');
+    btn.remove();
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Show setup links';
+    toast(e.message);
+  }
+}
+
+function copyLink(btn){
+  const input = btn.parentNode.querySelector('input');
+  input.select();
+  const done = () => { const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(()=>btn.textContent=t, 1500); };
+  // navigator.clipboard needs a secure context and permission; execCommand is the
+  // fallback that still works in an office browser that refuses it.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(input.value).then(done, () => { document.execCommand('copy'); done(); });
+  } else {
+    document.execCommand('copy'); done();
+  }
+}
+
 function renderOffice(st){
   // Drawn once and then left alone — a Refresh or an approval must not wipe a
   // half-typed customer.
@@ -604,6 +668,13 @@ function renderOffice(st){
       : (st.qbAuthUrl ? 'QuickBooks not connected — <a href="'+st.qbAuthUrl+'" target="_blank" rel="noopener">Connect QuickBooks</a> (reload after)'
           : 'QuickBooks not configured — set QB_CLIENT_ID / QB_CLIENT_SECRET in Script Properties')) +
     '</div>';
+  h += `<div class="card">
+    <h2 style="font-size:1.05rem">Technician setup</h2>
+    <div class="meta">Send each technician their own link. Opened once on their phone,
+      the app knows who they are and opens straight onto their day — no name to pick,
+      and nobody else can read their route.</div>
+    <button class="linkbtn" onclick="loadTechLinks(this)">Show setup links</button>
+    <div id="techlinks"></div></div>`;
   if (!st.pending.length) h += '<div class="empty">No visits waiting. ✓</div>';
   st.pending.forEach((v,i) => {
     h += `<div class="card" id="v${i}">
@@ -988,6 +1059,9 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 /* The company's own name, colour and lists. Cached so a cold start on a bad signal
    shows the right company immediately rather than last resort defaults; the network
    copy replaces it as soon as it lands. */
+/* The technician this phone was set up for, once the server has told us. */
+function knownTech(){ return CFG.you || ''; }
+
 function applyConfig(c){
   // Merge only when given something; paint every time, so the first call with no
   // cached config still puts the company's name on screen instead of leaving the
@@ -995,6 +1069,10 @@ function applyConfig(c){
   if (c) {
     CFG = Object.assign({}, CFG, c);
     try { localStorage.setItem('apt.cfg', JSON.stringify(CFG)); } catch(e){}
+    if (CFG.you && state.tech !== CFG.you) {
+      state.tech = CFG.you;
+      writeStore('apt.tech', CFG.you);
+    }
   }
   document.title = CFG.companyName + (IS_OFFICE ? ' — Office' : ' — Field App');
   const sub = $('subtitle'); if (sub) sub.textContent = CFG.companyName;
@@ -1009,7 +1087,7 @@ function applyConfig(c){
 try { applyConfig(JSON.parse(localStorage.getItem('apt.cfg') || 'null')); } catch(e){}
 applyConfig(null);   // paints the fallback company before the network answers
 
-api('getConfig', {})
+api('getConfig', { token: techToken() })
   .then(c => { applyConfig(c); if (!IS_OFFICE) render(); })
   .catch(() => {});   // the cached or fallback config is already on screen
 
