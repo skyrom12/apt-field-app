@@ -64,7 +64,17 @@
   .btn.ghost{background:#fff;color:var(--warn);border:1px solid var(--line);margin-top:8px}
   .btn.back{background:#fff;color:var(--muted);border:1px solid var(--line);margin-bottom:10px;width:auto;padding:8px 14px}
   .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-  .thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+  .thumbs figure{position:relative;margin:0}
+  .thumbs img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block}
+  /* 28px tap target: a fingertip on a wet phone needs more than an x in the corner */
+  .thumbs button{position:absolute;top:-7px;right:-7px;width:28px;height:28px;border-radius:50%;
+    border:1px solid var(--line);background:#fff;color:var(--warn);font-size:1rem;line-height:1;
+    font-weight:700;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+  .photocount{font-size:.82rem;color:var(--muted);margin-top:6px}
+  /* office view */
+  .ophotos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .ophotos img{width:128px;height:128px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:var(--bg)}
+  .ophotos .nothumb{display:inline-block;padding:4px 8px;text-decoration:underline;color:var(--navy)}
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:var(--ink);color:#fff;padding:10px 18px;border-radius:99px;font-size:.9rem;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
   .toast.show{opacity:1}
   .spinner{text-align:center;color:var(--muted);padding:30px 0}
@@ -171,6 +181,10 @@ async function api(action, params){
 }
 
 /* ---------------- TECH VIEW ---------------- */
+// Matches MAX_PHOTOS_PER_VISIT in the back end's Code.gs. The server truncates to
+// the same number, so this is a courtesy to the tech, not the enforcement.
+const MAX_PHOTOS = 12;
+
 let state = { tech: readStore('apt.tech'), day: defaultDay(), route: [], stop: null, photos: [],
               prices: [], timeIn: null, arrival: null, timer: null };
 
@@ -188,6 +202,32 @@ function getFix(){
       () => finish(null),
       { enableHighAccuracy: true, timeout: 11000, maximumAge: 0 });
   });
+}
+
+/**
+ * One photo in the office view. A thumbnail when Drive will serve one, and a plain
+ * "photo N" link when it will not - which is the case until enablePhotoLinkSharing()
+ * has been run, and for anything the app account cannot share. The anchor wraps both,
+ * so clicking always opens the full file either way.
+ */
+function photoTile(url, j){
+  const id = driveId(url);
+  const label = 'photo ' + (j + 1);
+  if (!id) return `<a href="${url}" target="_blank" rel="noopener">${label}</a>`;
+  const fallback = "this.replaceWith(Object.assign(document.createElement('span')," +
+                   "{className:'nothumb',textContent:'" + label + "'}))";
+  return `<a href="${url}" target="_blank" rel="noopener" title="Open full size">` +
+         `<img src="https://drive.google.com/thumbnail?id=${id}&sz=w256" alt="Photo ${j+1}"` +
+         ` loading="lazy" onerror="${fallback}"></a>`;
+}
+
+/** File id out of a Drive URL, so the office view can show a thumbnail rather than
+ *  a bare link. Mirrors driveIdFrom_ in the back end's Code.gs. */
+function driveId(url){
+  const parts = String(url || '').split('/d/');
+  if (parts.length < 2) return '';
+  const id = parts[1].split('/')[0].split('?')[0];
+  return id.length >= 20 ? id : '';
 }
 
 function clockTime(iso){
@@ -323,11 +363,13 @@ function renderForm(){
       <div class="field"><label>Repairs / parts needed (office only)</label><textarea id="repairs"></textarea></div>
       <div class="field"><label>Photos</label>
         <input type="file" id="photos" accept="image/*" multiple capture="environment">
-        <div class="thumbs" id="thumbs"></div></div>
+        <div class="thumbs" id="thumbs"></div>
+        <div class="photocount" id="photocount"></div></div>
       <button class="btn primary" id="submit" onclick="submitVisit(false)">Complete visit</button>
       <button class="btn ghost" onclick="submitVisit(true)">Unable to service…</button>
     </div>`;
   $('photos').onchange = handlePhotos;
+  renderThumbs();
   renderArrival();
 }
 
@@ -355,12 +397,46 @@ function recalc(){
 
 
 async function handlePhotos(e){
-  state.photos = [];
-  $('thumbs').innerHTML = '';
-  for (const f of e.target.files){
+  // Append, do not replace. The picker only hands back the files chosen this time,
+  // so resetting here meant a second trip to the camera threw away the first batch.
+  const files = [...e.target.files];
+  let full = 0;
+  for (const f of files){
+    if (state.photos.length >= MAX_PHOTOS){ full++; continue; }
     const dataUrl = await compress(f, 1600, .8);
-    state.photos.push({ name: f.name, mimeType: 'image/jpeg', dataBase64: dataUrl.split(',')[1] });
-    const img = document.createElement('img'); img.src = dataUrl; $('thumbs').appendChild(img);
+    state.photos.push({ name: f.name, mimeType: 'image/jpeg', dataBase64: dataUrl.split(',')[1], dataUrl });
+  }
+  // Clear the input so picking the same file again still fires onchange.
+  e.target.value = '';
+  renderThumbs();
+  if (full) toast(`Keeping ${MAX_PHOTOS} photos — ${full} more didn't fit`);
+}
+
+function removePhoto(i){ state.photos.splice(i, 1); renderThumbs(); }
+
+function renderThumbs(){
+  const box = $('thumbs');
+  if (!box) return;
+  box.innerHTML = '';
+  state.photos.forEach((p, i) => {
+    const fig = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = p.dataUrl; img.alt = `Photo ${i + 1}`;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '\u00d7';
+    del.title = 'Remove this photo';
+    del.setAttribute('aria-label', `Remove photo ${i + 1}`);
+    del.onclick = () => removePhoto(i);
+    fig.appendChild(img); fig.appendChild(del);
+    box.appendChild(fig);
+  });
+  const c = $('photocount');
+  if (c) {
+    c.textContent = state.photos.length
+      ? `${state.photos.length} photo${state.photos.length === 1 ? '' : 's'} attached` +
+        (state.photos.length >= MAX_PHOTOS ? ' (maximum)' : ' \u2014 tap Photos again to add more')
+      : '';
   }
 }
 
@@ -418,7 +494,13 @@ function submitVisit(skipped){
       skipped: skipped, skipReason: skipReason,
       photos: state.photos
     }})
-    .then(() => { toast(skipped ? 'Logged as skipped' : 'Visit sent to office ✓'); state.stop = null; loadRoute(); })
+    .then(r => {
+      const dropped = (r && r.photosDropped) || 0;
+      toast(skipped ? 'Logged as skipped'
+        : (dropped ? `Visit sent — ${dropped} photo(s) over the limit were not saved`
+                   : 'Visit sent to office ✓'));
+      state.stop = null; loadRoute();
+    })
     .catch(e => { toast(e.message); $('submit').disabled=false; $('submit').textContent='Complete visit'; });
 }
 
@@ -506,7 +588,8 @@ function renderOffice(st){
       ${officeWorkOrder(v)}
       ${v.noteToCustomer ? `<div class="kv"><b>Note to customer:</b> ${esc(v.noteToCustomer)}</div>` : ''}
       ${v.internalNote ? `<div class="kv"><b>Internal:</b> ${esc(v.internalNote)}</div>` : ''}
-      ${v.photos.length ? `<div class="kv"><b>Photos:</b> ${v.photos.map((p,j)=>`<a href="${p}" target="_blank" rel="noopener">photo ${j+1}</a>`).join(' ')}</div>` : ''}
+      ${v.photos.length ? `<div class="kv"><b>Photos (${v.photos.length}):</b>
+        <div class="ophotos">${v.photos.map((p,j)=>photoTile(p,j)).join('')}</div></div>` : ''}
       ${officeBill(v)}
       ${v.error ? `<div class="err">Last error: ${esc(v.error)}</div>` : ''}
       <div class="actions">
