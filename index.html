@@ -195,6 +195,106 @@ const IS_OFFICE = new URLSearchParams(location.search).get('view') === 'office';
 
 function techToken(){ try { return localStorage.getItem('apt.token') || ''; } catch(e){ return ''; } }
 
+/* ------------------------------------------------------------------ drafts
+   A visit in progress survives the app being closed.
+
+   A technician taps "I'm here", puts the phone away, cleans the pool, and comes
+   back twenty minutes later - by which time the phone has discarded the page. Before
+   this, that lost the arrival stamp and everything typed, and they started the stop
+   again, which made the recorded time wrong. Reported by Bradley 2026-10-07.
+
+   Photo bytes are deliberately NOT stored: twelve compressed photos are several MB
+   and localStorage is about 5. The count is stored instead, so the restore can tell
+   the technician plainly that the photos need taking again rather than silently
+   dropping them. */
+const DRAFT_KEY = 'apt.draft';
+
+function formSnapshot(){
+  if (!state.stop) return null;
+  const readings = {};
+  READING_FIELDS.forEach(([k]) => {
+    const el = $('r_' + k);
+    if (el && el.value !== '') readings[k] = el.value;
+  });
+  const chems = {};
+  document.querySelectorAll('.chem').forEach(row => {
+    const q = row.querySelector('.qty');
+    if (q && q.value !== '') chems[row.dataset.key] = q.value;
+  });
+  const val = id => { const el = $(id); return el ? el.value : ''; };
+  return {
+    savedAt: new Date().toISOString(),
+    tech: state.tech, day: state.day,
+    order: state.stop.order, customer: state.stop.customer, address: state.stop.address,
+    arrival: state.arrival, timeIn: state.timeIn,
+    services: [...document.querySelectorAll('.svc input:checked')].map(x => x.value),
+    readings: readings, chems: chems,
+    repairs: val('repairs'), custnote: val('custnote'), intnote: val('intnote'),
+    custChems: !!($('custChems') && $('custChems').checked),
+    photoCount: state.photos.length
+  };
+}
+
+function saveDraft(){
+  try {
+    const d = formSnapshot();
+    if (d) localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+  } catch(e){}   // a full or blocked store must never stop a visit
+}
+
+function readDraft(){
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+    if (!d || !d.savedAt) return null;
+    // Only good for the day it was started. A week-old draft reopening itself would
+    // be worse than having lost it.
+    if (new Date(d.savedAt).toDateString() !== new Date().toDateString()) { clearDraft(); return null; }
+    return d;
+  } catch(e){ return null; }
+}
+
+function clearDraft(){ try { localStorage.removeItem(DRAFT_KEY); } catch(e){} }
+
+/** Put the technician back where they were. Returns true if it restored something. */
+function restoreDraft(){
+  const d = readDraft();
+  if (!d || state.stop) return false;
+  if (d.tech && state.tech && d.tech !== state.tech) return false;
+  const stop = state.route.find(s => s.order === d.order && s.customer === d.customer);
+  if (!stop) return false;
+
+  state.stop = stop;
+  state.arrival = d.arrival || null;
+  state.timeIn = d.timeIn || new Date().toISOString();
+  state.photos = [];
+  render();                                   // builds the form, then fill it back in
+
+  document.querySelectorAll('.svc input').forEach(cb => {
+    cb.checked = (d.services || []).indexOf(cb.value) >= 0;
+  });
+  Object.keys(d.readings || {}).forEach(k => {
+    const el = $('r_' + k); if (el) el.value = d.readings[k];
+  });
+  document.querySelectorAll('.chem').forEach(row => {
+    const v = (d.chems || {})[row.dataset.key];
+    const q = row.querySelector('.qty');
+    if (v != null && q) q.value = v;
+  });
+  ['repairs','custnote','intnote'].forEach(id => { if ($(id)) $(id).value = d[id] || ''; });
+  if ($('custChems')) $('custChems').checked = !!d.custChems;
+  if (typeof recalc === 'function') recalc();
+
+  if (state.arrival && state.arrival.at){
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(renderArrival, 30000);
+    renderArrival();
+  }
+  toast(d.photoCount
+    ? `Picked up where you left off \u2014 your ${d.photoCount} photo(s) need taking again`
+    : 'Picked up where you left off');
+  return true;
+}
+
 function readStore(k){ try { return localStorage.getItem(k) || ''; } catch(e){ return ''; } }
 function writeStore(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 function $(id){ return document.getElementById(id); }
@@ -288,6 +388,7 @@ async function markArrived(){
   const fix = await getFix();
   state.arrival = Object.assign({ at: at }, fix || { lat: null, lng: null, accuracy: null });
   state.timeIn = at;
+  saveDraft();        // before anything else can go wrong - this is the value that matters
   renderArrival();
   if (state.timer) clearInterval(state.timer);
   state.timer = setInterval(renderArrival, 30000);
@@ -354,11 +455,22 @@ function render(){
   $('day').onchange = e => { state.day = e.target.value; loadRoute(); };
 }
 
+let draftChecked = false;
+
 function loadRoute(){
   state.route = []; render();
   if (!state.tech) return;
   api('getRoute', { tech: state.tech, day: state.day, token: techToken() })
-    .then(r => { state.route = r; render(); })
+    .then(r => {
+      state.route = r;
+      // Only on the first load of a session: re-entering a stop mid-session would be
+      // startling, and openStop already overwrites the draft.
+      if (!draftChecked){
+        draftChecked = true;
+        if (restoreDraft()) return;   // restoreDraft() renders the form itself
+      }
+      render();
+    })
     .catch(e => toast(e.message));
 }
 
@@ -372,6 +484,8 @@ function openStop(order){
   state.arrival = null;
   if (state.timer){ clearInterval(state.timer); state.timer = null; }
   render();
+  clearDraft();
+  saveDraft();        // remember which stop is open even before anything is typed
 }
 
 function chemRow(p){
@@ -486,6 +600,7 @@ function renderThumbs(){
     fig.appendChild(img); fig.appendChild(del);
     box.appendChild(fig);
   });
+  saveDraft();
   const c = $('photocount');
   if (c) {
     c.textContent = state.photos.length
@@ -554,6 +669,7 @@ function submitVisit(skipped){
       toast(skipped ? 'Logged as skipped'
         : (dropped ? `Visit sent — ${dropped} photo(s) over the limit were not saved`
                    : 'Visit sent to office ✓'));
+      clearDraft();
       state.stop = null; loadRoute();
     })
     .catch(e => { toast(e.message); $('submit').disabled=false; $('submit').textContent='Complete visit'; });
@@ -1056,6 +1172,17 @@ async function cuRemove(el, key){
 /* ---------------- BOOT ---------------- */
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 
+/* Save the draft as the technician works. Delegated from #app and attached once, so
+   it survives every re-render of the form without stacking duplicate listeners.
+   Without this, readings and notes typed before the phone slept were still lost. */
+if (!IS_OFFICE) {
+  ['input','change'].forEach(ev =>
+    $('app').addEventListener(ev, () => { if (state.stop) saveDraft(); }, true));
+  // Belt and braces: iOS fires pagehide rather than unload when it discards a page.
+  ['pagehide','visibilitychange'].forEach(ev =>
+    window.addEventListener(ev, () => { if (state.stop) saveDraft(); }));
+}
+
 /* The company's own name, colour and lists. Cached so a cold start on a bad signal
    shows the right company immediately rather than last resort defaults; the network
    copy replaces it as soon as it lands. */
@@ -1094,6 +1221,15 @@ api('getConfig', { token: techToken() })
 if (IS_OFFICE) {
   loadOffice();
 } else {
+  /* A visit in progress belongs to the day it was started, which is not necessarily
+     today's default - a technician covering a colleague's round picks the day by
+     hand. Adopt it before the route loads, or the draft's stop would not be in the
+     route we fetch and the restore would silently do nothing. */
+  const pending = readDraft();
+  if (pending){
+    if (!state.tech && pending.tech) state.tech = pending.tech;
+    if (pending.day) state.day = pending.day;
+  }
   render();
   loadPrices();
   if (state.tech) loadRoute();
