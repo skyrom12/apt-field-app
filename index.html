@@ -71,6 +71,7 @@
     border:1px solid var(--line);background:#fff;color:var(--warn);font-size:1rem;line-height:1;
     font-weight:700;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.25)}
   .photocount{font-size:.82rem;color:var(--muted);margin-top:6px}
+  .pickmore{font-size:.86rem;color:var(--muted);margin-top:6px}
   .who{font-weight:700;margin-right:8px}
   .techlink{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
   .techlink b{min-width:84px}
@@ -545,13 +546,22 @@ function renderForm(){
       <div class="field"><label>Internal note (office only)</label><textarea id="intnote"></textarea></div>
       <div class="field"><label>Repairs / parts needed (office only)</label><textarea id="repairs"></textarea></div>
       <div class="field"><label>Photos</label>
+        <!-- Two inputs on purpose. The capture attribute sends the phone straight
+             to the camera, which is the one-tap path the techs want - but it returns
+             exactly one image and ignores multiple, so three photos meant three
+             trips. The library input has no capture attribute, so several can be
+             picked at once. Both append to the same set. -->
         <input type="file" id="photos" accept="image/*" multiple capture="environment">
+        <div class="pickmore">or <button type="button" class="linkbtn"
+          onclick="document.getElementById('photolib').click()">choose several from the library</button></div>
+        <input type="file" id="photolib" accept="image/*" multiple style="display:none">
         <div class="thumbs" id="thumbs"></div>
         <div class="photocount" id="photocount"></div></div>
       <button class="btn primary" id="submit" onclick="submitVisit(false)">Complete visit</button>
       <button class="btn ghost" onclick="submitVisit(true)">Unable to service…</button>
     </div>`;
   $('photos').onchange = handlePhotos;
+  $('photolib').onchange = handlePhotos;
   renderThumbs();
   renderArrival();
 }
