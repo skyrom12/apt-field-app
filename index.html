@@ -77,6 +77,20 @@
   .techlink input{flex:1;min-width:220px;font-size:.82rem;padding:6px 8px;border:1px solid var(--line);
     border-radius:8px;background:var(--bg);color:var(--muted)}
   .techlink .btn{width:auto;padding:6px 14px;margin:0}
+  /* office editor */
+  .editor{border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:10px;background:var(--bg)}
+  .editor .sect{font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--muted);margin:14px 0 6px}
+  .editor .sect:first-child{margin-top:0}
+  .editor .btn{width:auto;padding:9px 18px;margin-right:8px;margin-top:12px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .echems{display:grid;gap:6px;max-height:300px;overflow:auto}
+  .erow{display:flex;align-items:center;gap:10px;justify-content:space-between;
+    background:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+  .erow i{color:var(--muted);font-style:normal;font-size:.8rem;margin-left:6px}
+  .erow input{width:88px;text-align:right;padding:6px 8px;border:1px solid var(--line);border-radius:6px}
+  @media (max-width:760px){ .grid4{grid-template-columns:repeat(2,1fr)} .grid2{grid-template-columns:1fr} }
   /* office view */
   .ophotos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
   .ophotos img{width:128px;height:128px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:var(--bg)}
@@ -739,6 +753,111 @@ function officeWorkOrder(v){
   return h;
 }
 
+/* The visit currently open for editing, so Save knows what to send. */
+let editing = null;
+
+/**
+ * Open a submitted visit as a form. Everything the technician sent is editable,
+ * because nothing has billed or emailed yet and the office is the last check.
+ *
+ * Quantities are sent, not money: the server reprices from the Prices tab exactly as
+ * it does for a submit. The one place a figure is accepted is the explicit charge
+ * override, which is stored as an override so the total stays a visible decision
+ * rather than an unexplained number.
+ */
+function editVisit(visitId){
+  const v = (officeCache.pending || []).filter(x => x.visitId === visitId)[0];
+  if (!v) return;
+  const box = $('ed_' + visitId);
+  if (!box) return;
+  if (box.innerHTML){ box.innerHTML = ''; editing = null; return; }   // Edit toggles
+
+  editing = visitId;
+  const wo = v.workOrder || {};
+  const sel = (CFG.services || []);
+  const ticked = String(v.services || '').split(',').map(x => x.trim());
+  const chems = wo.chems || {};
+  const readings = wo.readings || {};
+
+  box.innerHTML = `<div class="editor">
+    <div class="sect">Services</div>
+    <div class="svc">${sel.map(x => `<label><input type="checkbox" class="eSvc" value="${esc(x)}"
+      ${ticked.indexOf(x) >= 0 ? 'checked' : ''}>${esc(x)}</label>`).join('')}</div>
+
+    <div class="sect">Water tests</div>
+    <div class="grid4">${READING_FIELDS.map(([k,l]) => `<div class="field"><label>${l}</label>
+      <input id="eR_${k}" inputmode="decimal" value="${esc(readings[k] == null ? '' : readings[k])}"></div>`).join('')}</div>
+
+    <div class="sect">Chemicals used</div>
+    <div class="echems">${(state.prices || []).map(p => `<div class="erow" data-key="${esc(p.key)}">
+      <span>${esc(p.label)} <i>${p.price ? money(p.price) + ' / ' + esc(p.unit) : 'price not set'}</i></span>
+      <input class="eQty" inputmode="decimal" value="${chems[p.key] == null ? '' : chems[p.key]}"></div>`).join('')}</div>
+
+    <div class="sect">Money</div>
+    <div class="grid2">
+      <div class="field"><label>Service rate for this visit</label>
+        <input id="eRate" inputmode="decimal" value="${v.rateOverride == null ? '' : v.rateOverride}"
+          placeholder="${v.customerRate ? money(v.customerRate) + ' (their usual)' : 'no rate on file'}"></div>
+      <div class="field"><label>Chemical charge override</label>
+        <input id="eCharge" inputmode="decimal" value="${wo.chemChargeOverride == null ? '' : wo.chemChargeOverride}"
+          placeholder="leave blank to use the quantities"></div>
+    </div>
+
+    <div class="sect">Notes</div>
+    <div class="field"><label>Note to customer (goes in their email)</label>
+      <textarea id="eCust">${esc(v.noteToCustomer || '')}</textarea></div>
+    <div class="field"><label>Internal note (office only)</label>
+      <textarea id="eInt">${esc(v.internalNote || '')}</textarea></div>
+    <div class="field"><label>Repairs / parts needed</label>
+      <input id="eRep" value="${esc(wo.repairs || '')}"></div>
+    <label class="custchem"><input type="checkbox" id="eCustChems" ${wo.custChems ? 'checked' : ''}>
+      Customer's own chemicals — don't bill</label>
+
+    <button class="btn primary" onclick="saveVisit('${visitId}', this)">Save changes</button>
+    <button class="btn ghost" onclick="editVisit('${visitId}')">Cancel</button>
+    <div class="err" id="eErr_${visitId}"></div>
+  </div>`;
+}
+
+/** Send the edit. The office sees the recomputed figures before they approve. */
+async function saveVisit(visitId, btn){
+  const err = $('eErr_' + visitId);
+  err.textContent = '';
+  const chems = {};
+  document.querySelectorAll('.erow').forEach(row => {
+    const q = parseFloat(row.querySelector('.eQty').value);
+    if (!isNaN(q) && q > 0) chems[row.dataset.key] = q;
+  });
+  const readings = {};
+  READING_FIELDS.forEach(([k]) => {
+    const el = $('eR_' + k);
+    if (el && el.value.trim() !== '') readings[k] = el.value.trim();
+  });
+  const fields = {
+    services: [...document.querySelectorAll('.eSvc:checked')].map(x => x.value),
+    readings: readings,
+    chems: chems,
+    repairs: $('eRep').value,
+    custChems: $('eCustChems').checked,
+    noteToCustomer: $('eCust').value,
+    internalNote: $('eInt').value,
+    rate: $('eRate').value.trim(),
+    chemChargeOverride: $('eCharge').value.trim()
+  };
+  btn.disabled = true; btn.textContent = 'Saving\u2026';
+  try {
+    const r = await api('updateVisit', { pin: pin, visitId: visitId, fields: fields });
+    toast(r.overridden
+      ? `Saved — charge set to ${money(r.chemCharge)} (quantities come to ${money(r.computedCharge)})`
+      : `Saved — chemicals ${money(r.chemCharge)}`);
+    editing = null;
+    loadOffice();                       // redraw from the server, never from the form
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Save changes';
+    err.textContent = e.message;
+  }
+}
+
 /**
  * The technicians' setup links. Fetched on demand rather than with the queue: each
  * one is an identity, so they are not worth minting or putting on screen until the
@@ -775,7 +894,10 @@ function copyLink(btn){
   }
 }
 
+let officeCache = {};
+
 function renderOffice(st){
+  officeCache = st;
   // Drawn once and then left alone — a Refresh or an approval must not wipe a
   // half-typed customer.
   if (!addRendered) { renderAdd(); renderCustomersCard(); addRendered = true; }
@@ -795,7 +917,8 @@ function renderOffice(st){
   st.pending.forEach((v,i) => {
     h += `<div class="card" id="v${i}">
       <h2 style="font-size:1.05rem">${esc(v.customer)} <span class="badge">${esc(v.status)}</span></h2>
-      <div class="meta">${esc(v.when)} · ${esc(v.tech)} · ${esc(v.address)}</div>
+      <div class="meta">${esc(v.when)} · ${esc(v.tech)} · ${esc(v.address)}${
+        v.editedAt ? ` · <b>edited by office ${esc(v.editedAt)}</b>` : ''}</div>
       ${v.services ? `<div class="kv"><b>Services:</b> ${esc(v.services)}</div>` : ''}
       ${v.readings ? `<div class="kv"><b>Readings:</b> ${esc(v.readings)}</div>` : ''}
       ${v.chemicals ? `<div class="kv"><b>Chemicals:</b> ${esc(v.chemicals)}</div>` : ''}
@@ -807,7 +930,9 @@ function renderOffice(st){
         <div class="ophotos" id="ph_${v.visitId}">${v.photos.map((p,j)=>photoTile(p,j)).join('')}</div></div>` : ''}
       ${officeBill(v)}
       ${v.error ? `<div class="err">Last error: ${esc(v.error)}</div>` : ''}
+      <div id="ed_${v.visitId}"></div>
       <div class="actions">
+        <button onclick="editVisit('${v.visitId}')">Edit</button>
         <button class="primary" onclick="approve('${v.visitId}',${i},true,true)">Approve — invoice + email</button>
         <button onclick="approve('${v.visitId}',${i},false,true)">Email only</button>
         <button onclick="approve('${v.visitId}',${i},false,false)">Approve only</button>
