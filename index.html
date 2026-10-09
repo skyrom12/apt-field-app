@@ -249,7 +249,7 @@ function formSnapshot(){
     savedAt: new Date().toISOString(),
     tech: state.tech, day: state.day,
     order: state.stop.order, customer: state.stop.customer, address: state.stop.address,
-    arrival: state.arrival, timeIn: state.timeIn,
+    arrival: state.arrival, timeIn: state.timeIn, clientId: state.clientId,
     services: [...document.querySelectorAll('.svc input:checked')].map(x => x.value),
     readings: readings, chems: chems,
     repairs: val('repairs'), custnote: val('custnote'), intnote: val('intnote'),
@@ -285,10 +285,15 @@ function restoreDraft(){
   if (d.tech && state.tech && d.tech !== state.tech) return false;
   const stop = state.route.find(s => s.order === d.order && s.customer === d.customer);
   if (!stop) return false;
+  // Already submitted today. This is the case where the visit landed but the reply
+  // never arrived, and reopening the stop is how a technician ends up filing it
+  // twice - which is exactly what happened on 2026-10-09.
+  if (stop.status) { clearDraft(); return false; }
 
   state.stop = stop;
   state.arrival = d.arrival || null;
   state.timeIn = d.timeIn || new Date().toISOString();
+  state.clientId = d.clientId || null;
   state.photos = [];
   render();                                   // builds the form, then fill it back in
 
@@ -500,6 +505,11 @@ function loadRoute(){
 function openStop(order){
   state.stop = state.route.find(s => s.order === order);
   state.photos = [];
+  // One key per visit, generated here and kept in the draft. The server returns the
+  // existing visit if it sees the same key twice, so tapping Complete again - or
+  // the app restarting after the request already landed - cannot bill twice.
+  state.clientId = (crypto.randomUUID && crypto.randomUUID()) ||
+    (Date.now() + '-' + Math.random().toString(36).slice(2));
   // Opening the screen is not arriving. The clock starts when the tech taps
   // "I'm here"; if they never do, submit falls back to the time the stop was
   // opened so a visit is never left without a time at all.
@@ -687,6 +697,7 @@ function submitVisit(skipped){
 
   $('submit').disabled = true; $('submit').textContent = 'Sending…';
   api('submitVisit', { token: techToken(), payload: {
+      clientId: state.clientId,
       tech: state.tech, day: state.day,
       customer: state.stop.customer, address: state.stop.address,
       services: services,
@@ -698,7 +709,8 @@ function submitVisit(skipped){
     }})
     .then(r => {
       const dropped = (r && r.photosDropped) || 0;
-      toast(skipped ? 'Logged as skipped'
+      if (r && r.duplicate) toast('Already sent \u2014 this visit was logged once');
+      else toast(skipped ? 'Logged as skipped'
         : (dropped ? `Visit sent — ${dropped} photo(s) over the limit were not saved`
                    : 'Visit sent to office ✓'));
       clearDraft();
