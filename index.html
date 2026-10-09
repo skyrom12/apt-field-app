@@ -90,7 +90,15 @@
   .erow{display:flex;align-items:center;gap:10px;justify-content:space-between;
     background:#fff;border:1px solid var(--line);border-radius:8px;padding:7px 10px}
   .erow i{color:var(--muted);font-style:normal;font-size:.8rem;margin-left:6px}
-  .erow input{width:88px;text-align:right;padding:6px 8px;border:1px solid var(--line);border-radius:6px}
+  .erow input{width:84px;text-align:right;padding:6px 8px;border:1px solid var(--line);border-radius:6px}
+  .erow .elabel{flex:1}
+  .ehead{display:flex;gap:10px;justify-content:space-between;font-size:.74rem;font-weight:700;
+    text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:0 10px 4px}
+  .ehead span:first-child{flex:1}
+  .ehead span:not(:first-child){width:84px;text-align:right}
+  .hint{font-size:.8rem;color:var(--muted);margin-top:6px}
+  .ephotos{display:flex;flex-wrap:wrap;gap:12px}
+  .edrop{display:flex;align-items:center;gap:6px;font-size:.88rem}
   @media (max-width:760px){ .grid4{grid-template-columns:repeat(2,1fr)} .grid2{grid-template-columns:1fr} }
   /* office view */
   .ophotos{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
@@ -766,6 +774,22 @@ function officeWorkOrder(v){
 /* The visit currently open for editing, so Save knows what to send. */
 let editing = null;
 
+/** An ISO time as a datetime-local input wants it, in the browser's own timezone. */
+function dtLocal(iso){
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+    + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+/** The Drive file id out of a signed photo link, so removal is by file, not position. */
+function photoIdOf(url){
+  const m = String(url || '').match(/[?&]photo=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 /**
  * Open a submitted visit as a form. Everything the technician sent is editable,
  * because nothing has billed or emailed yet and the office is the last check.
@@ -787,6 +811,7 @@ function editVisit(visitId){
   const sel = (CFG.services || []);
   const ticked = String(v.services || '').split(',').map(x => x.trim());
   const chems = wo.chems || {};
+  const chemPrices = wo.chemPrices || {};
   const readings = wo.readings || {};
 
   box.innerHTML = `<div class="editor">
@@ -799,9 +824,16 @@ function editVisit(visitId){
       <input id="eR_${k}" inputmode="decimal" value="${esc(readings[k] == null ? '' : readings[k])}"></div>`).join('')}</div>
 
     <div class="sect">Chemicals used</div>
+    <div class="ehead"><span>Item</span><span>Qty</span><span>Price each</span></div>
     <div class="echems">${(state.prices || []).map(p => `<div class="erow" data-key="${esc(p.key)}">
-      <span>${esc(p.label)} <i>${p.price ? money(p.price) + ' / ' + esc(p.unit) : 'price not set'}</i></span>
-      <input class="eQty" inputmode="decimal" value="${chems[p.key] == null ? '' : chems[p.key]}"></div>`).join('')}</div>
+      <span class="elabel">${esc(p.label)} <i>per ${esc(p.unit)}</i></span>
+      <input class="eQty" inputmode="decimal" placeholder="0"
+        value="${chems[p.key] == null ? '' : chems[p.key]}">
+      <input class="ePrice" inputmode="decimal"
+        placeholder="${p.price ? money(p.price) : 'not set'}"
+        value="${chemPrices[p.key] == null ? '' : chemPrices[p.key]}"></div>`).join('')}</div>
+    <div class="hint">Leave a price blank to use the list price shown. Anything typed
+      applies to this visit only and never changes the price list.</div>
 
     <div class="sect">Money</div>
     <div class="grid2">
@@ -812,6 +844,37 @@ function editVisit(visitId){
         <input id="eCharge" inputmode="decimal" value="${wo.chemChargeOverride == null ? '' : wo.chemChargeOverride}"
           placeholder="leave blank to use the quantities"></div>
     </div>
+
+    <div class="sect">Visit</div>
+    <div class="grid2">
+      <div class="field"><label>Logged by</label>
+        <select id="eTech">${(CFG.techs || []).map(t =>
+          `<option ${t === v.tech ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+      <div class="field"><label>&nbsp;</label>
+        <label class="custchem"><input type="checkbox" id="eSkipped" ${
+          v.status === 'Skipped' ? 'checked' : ''} onchange="document.getElementById('eSkipWrap').style.display=this.checked?'block':'none'">
+          Unable to service this stop</label></div>
+    </div>
+    <div id="eSkipWrap" style="display:${v.status === 'Skipped' ? 'block' : 'none'}">
+      <div class="field"><label>Why it could not be serviced</label>
+        <input id="eSkipReason" value="${esc(v.skipReason || '')}"></div>
+    </div>
+
+    <div class="sect">Times</div>
+    <div class="grid2">
+      <div class="field"><label>Arrived</label>
+        <input type="datetime-local" id="eArr" value="${dtLocal(wo.arrival && wo.arrival.at)}"></div>
+      <div class="field"><label>Left</label>
+        <input type="datetime-local" id="eLeft" value="${dtLocal(wo.departedAt)}"></div>
+    </div>
+    <div class="hint">${wo.arrivalSetByOffice
+      ? 'The arrival time on this visit was set by the office, not measured.'
+      : 'Changing a time marks it as office-set. The GPS check stays attached to the fix the phone actually took.'}</div>
+
+    ${v.photos && v.photos.length ? `<div class="sect">Photos</div>
+      <div class="ephotos">${v.photos.map((u, j) => `<label class="edrop">
+        <input type="checkbox" class="eDropPhoto" value="${esc(photoIdOf(u))}">
+        remove <a href="${u}" target="_blank" rel="noopener">photo ${j + 1}</a></label>`).join('')}</div>` : ''}
 
     <div class="sect">Notes</div>
     <div class="field"><label>Note to customer (goes in their email)</label>
@@ -834,9 +897,14 @@ async function saveVisit(visitId, btn){
   const err = $('eErr_' + visitId);
   err.textContent = '';
   const chems = {};
+  const chemPrices = {};
   document.querySelectorAll('.erow').forEach(row => {
     const q = parseFloat(row.querySelector('.eQty').value);
     if (!isNaN(q) && q > 0) chems[row.dataset.key] = q;
+    const pr = row.querySelector('.ePrice').value.trim();
+    // Sent for every row, so clearing a box clears the override rather than leaving
+    // yesterday's price quietly in force.
+    chemPrices[row.dataset.key] = pr;
   });
   const readings = {};
   READING_FIELDS.forEach(([k]) => {
@@ -852,7 +920,14 @@ async function saveVisit(visitId, btn){
     noteToCustomer: $('eCust').value,
     internalNote: $('eInt').value,
     rate: $('eRate').value.trim(),
-    chemChargeOverride: $('eCharge').value.trim()
+    chemChargeOverride: $('eCharge').value.trim(),
+    chemPrices: chemPrices,
+    tech: $('eTech').value,
+    skipped: $('eSkipped').checked,
+    skipReason: $('eSkipReason') ? $('eSkipReason').value : '',
+    arrivedAt: $('eArr').value ? new Date($('eArr').value).toISOString() : '',
+    departedAt: $('eLeft').value ? new Date($('eLeft').value).toISOString() : '',
+    removePhotoIds: [...document.querySelectorAll('.eDropPhoto:checked')].map(x => x.value)
   };
   btn.disabled = true; btn.textContent = 'Saving\u2026';
   try {
