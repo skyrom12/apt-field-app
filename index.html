@@ -97,6 +97,8 @@
   .ehead span:first-child{flex:1}
   .ehead span:not(:first-child){width:84px;text-align:right}
   .hint{font-size:.8rem;color:var(--muted);margin-top:6px}
+  .asreported{background:var(--bg);border:1px solid var(--line);border-radius:8px;
+    padding:8px 10px;font-size:.86rem;margin-bottom:8px;color:var(--ink)}
   .ephotos{display:flex;flex-wrap:wrap;gap:12px}
   .edrop{display:flex;align-items:center;gap:6px;font-size:.88rem}
   @media (max-width:760px){ .grid4{grid-template-columns:repeat(2,1fr)} .grid2{grid-template-columns:1fr} }
@@ -448,7 +450,7 @@ function defaultDay(){
 function loadPrices(){
   const cached = readStore('apt.prices');
   if (cached) { try { state.prices = JSON.parse(cached); } catch(e){} }
-  api('getPrices', {})
+  return api('getPrices', {})
     .then(d => { state.prices = d.items || []; writeStore('apt.prices', JSON.stringify(state.prices)); })
     .catch(()=>{ /* offline: cached prices still work; server reprices anyway */ });
 }
@@ -818,12 +820,36 @@ function editVisit(visitId){
   if (!box) return;
   if (box.innerHTML){ box.innerHTML = ''; editing = null; return; }   // Edit toggles
 
+  // Without the price list there are no chemical rows, and an editor that cannot
+  // show the chemicals must not be able to save over them either. Fetch, then open.
+  if (!(state.prices || []).length){
+    box.innerHTML = '<div class="editor"><div class="spinner">Loading price list\u2026</div></div>';
+    loadPrices().then(() => {
+      box.innerHTML = '';
+      if ((state.prices || []).length) editVisit(visitId);
+      else box.innerHTML = '<div class="editor"><div class="err">Could not load the price '
+        + 'list, so the chemicals cannot be edited yet. Check the connection and press '
+        + 'Edit again \u2014 nothing has been changed.</div></div>';
+    });
+    return;
+  }
+
+  // Only one editor open at a time. The inputs are addressed by id, so a second open
+  // card would have Save reading the wrong visit's figures.
+  if (editing && editing !== visitId){
+    const prev = $('ed_' + editing);
+    if (prev) prev.innerHTML = '';
+  }
   editing = visitId;
   const wo = v.workOrder || {};
   const sel = (CFG.services || []);
   const ticked = String(v.services || '').split(',').map(x => x.trim());
   const chems = wo.chems || {};
   const chemPrices = wo.chemPrices || {};
+  // What the technician actually listed, kept on screen while the office edits the
+  // quantities beside it. From the first-edit snapshot once there is one, so it keeps
+  // saying what was reported rather than what the office has since made of it.
+  const reported = (wo.techOriginal && wo.techOriginal.chemicals) || v.chemicals || '';
   const readings = wo.readings || {};
 
   box.innerHTML = `<div class="editor">
@@ -836,6 +862,9 @@ function editVisit(visitId){
       <input id="eR_${k}" inputmode="decimal" value="${esc(readings[k] == null ? '' : readings[k])}"></div>`).join('')}</div>
 
     <div class="sect">Chemicals used</div>
+    <div class="asreported">${reported
+      ? 'Technician reported: <b>' + esc(reported) + '</b>'
+      : 'The technician listed no chemicals on this visit.'}</div>
     <div class="ehead"><span>Item</span><span>Qty</span><span>Price each</span></div>
     <div class="echems">${(state.prices || []).map(p => `<div class="erow" data-key="${esc(p.key)}">
       <span class="elabel">${esc(p.label)} <i>per ${esc(p.unit)}</i></span>
@@ -906,13 +935,18 @@ function editVisit(visitId){
 
 /** Send the edit. The office sees the recomputed figures before they approve. */
 async function saveVisit(visitId, btn){
+  const box = $('ed_' + visitId);
   const err = $('eErr_' + visitId);
   err.textContent = '';
+  // Read out of this card, not out of the document. The fields are addressed by id,
+  // and getElementById would hand back the first match on the page.
+  const f = sel => box.querySelector('#' + sel);
   const chems = {};
   const chemPrices = {};
-  document.querySelectorAll('.erow').forEach(row => {
-    const q = parseFloat(row.querySelector('.eQty').value);
-    if (!isNaN(q) && q > 0) chems[row.dataset.key] = q;
+  const rows = [...box.querySelectorAll('.erow')];
+  rows.forEach(row => {
+    const qty = parseFloat(row.querySelector('.eQty').value);
+    if (!isNaN(qty) && qty > 0) chems[row.dataset.key] = qty;
     const pr = row.querySelector('.ePrice').value.trim();
     // Sent for every row, so clearing a box clears the override rather than leaving
     // yesterday's price quietly in force.
@@ -920,27 +954,32 @@ async function saveVisit(visitId, btn){
   });
   const readings = {};
   READING_FIELDS.forEach(([k]) => {
-    const el = $('eR_' + k);
+    const el = f('eR_' + k);
     if (el && el.value.trim() !== '') readings[k] = el.value.trim();
   });
   const fields = {
-    services: [...document.querySelectorAll('.eSvc:checked')].map(x => x.value),
+    services: [...box.querySelectorAll('.eSvc:checked')].map(x => x.value),
     readings: readings,
-    chems: chems,
-    repairs: $('eRep').value,
-    custChems: $('eCustChems').checked,
-    noteToCustomer: $('eCust').value,
-    internalNote: $('eInt').value,
-    rate: $('eRate').value.trim(),
-    chemChargeOverride: $('eCharge').value.trim(),
-    chemPrices: chemPrices,
-    tech: $('eTech').value,
-    skipped: $('eSkipped').checked,
-    skipReason: $('eSkipReason') ? $('eSkipReason').value : '',
-    arrivedAt: $('eArr').value ? new Date($('eArr').value).toISOString() : '',
-    departedAt: $('eLeft').value ? new Date($('eLeft').value).toISOString() : '',
-    removePhotoIds: [...document.querySelectorAll('.eDropPhoto:checked')].map(x => x.value)
+    repairs: f('eRep').value,
+    custChems: f('eCustChems').checked,
+    noteToCustomer: f('eCust').value,
+    internalNote: f('eInt').value,
+    rate: f('eRate').value.trim(),
+    chemChargeOverride: f('eCharge').value.trim(),
+    tech: f('eTech').value,
+    skipped: f('eSkipped').checked,
+    skipReason: f('eSkipReason') ? f('eSkipReason').value : '',
+    arrivedAt: f('eArr').value ? new Date(f('eArr').value).toISOString() : '',
+    departedAt: f('eLeft').value ? new Date(f('eLeft').value).toISOString() : '',
+    removePhotoIds: [...box.querySelectorAll('.eDropPhoto:checked')].map(x => x.value)
   };
+  // Chemicals go only if the rows were on screen. An editor with no price list has
+  // nothing to say about them, and an empty set reads as "the office removed every
+  // chemical" - which is how a technician's report got erased.
+  if (rows.length){
+    fields.chems = chems;
+    fields.chemPrices = chemPrices;
+  }
   btn.disabled = true; btn.textContent = 'Saving\u2026';
   try {
     const r = await api('updateVisit', { pin: pin, visitId: visitId, fields: fields });
@@ -1441,6 +1480,10 @@ api('getConfig', { token: techToken() })
   .catch(() => {});   // the cached or fallback config is already on screen
 
 if (IS_OFFICE) {
+  /* The office editor is built out of the price list: no price list, no chemical
+     rows to show or to send back. Without this the office could not see what a
+     technician had listed, and saving sent no chemicals at all. */
+  loadPrices();
   loadOffice();
 } else {
   /* A visit in progress belongs to the day it was started, which is not necessarily
