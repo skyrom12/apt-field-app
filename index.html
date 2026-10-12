@@ -1337,6 +1337,14 @@ function renderCustList(){
       ${opened ? `
       <div class="cu-body">
         <div class="f2">
+          <div class="field"><label>Name</label><input data-r="customer" value="${esc(c.customer)}"></div>
+          <div class="field"><label>Street address</label><input data-r="address" value="${esc(c.address)}"></div>
+        </div>
+        <div class="note">Correcting a spelling here changes it on the route and on every
+          past visit too, so the history stays with the customer. It does not move them:
+          to put a customer at a different address, remove them and add them again so the
+          route is resequenced.</div>
+        <div class="f2">
           <div class="field"><label>Email</label><input data-f="email" value="${esc(c.email)}" inputmode="email"></div>
           <div class="field"><label>Phone</label><input data-f="phone" value="${esc(c.phone)}" inputmode="tel"></div>
         </div>
@@ -1399,16 +1407,42 @@ async function cuSave(el, key){
   const c = cust.list.find(x => custKey(x) === key);
   const fields = {};
   el.querySelectorAll('[data-f]').forEach(i => { fields[i.dataset.f] = i.value.trim(); });
+  const newName = el.querySelector('[data-r=customer]').value.trim();
+  const newAddr = el.querySelector('[data-r=address]').value.trim();
+  const renaming = newName !== c.customer || newAddr !== c.address;
   const btn = el.querySelector('[data-act=save]');
+  const err = el.querySelector('[data-err]');
+  err.textContent = '';
+
+  // The name and address are the key the routes and the visit history hang off, so
+  // this is asked out loud rather than slipped in with the email address.
+  if (renaming && !confirm('Change ' + c.customer + ' to ' + newName + '?\n\n'
+      + newAddr + '\n\nThe route and every past visit are changed to match. Their '
+      + 'position on the route and their history are kept.')) return;
+
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
+    // Rename first: everything after it has to address the customer by the new key.
+    if (renaming) {
+      await api('renameCustomer', { pin: pin, customer: c.customer, address: c.address,
+                                    fields: { customer: newName, address: newAddr } });
+      c.customer = newName; c.address = newAddr;
+    }
     await api('updateCustomer', { pin: pin, customer: c.customer, address: c.address, fields: fields });
     Object.assign(c, { email: fields.email, phone: fields.phone, qbCustomerId: fields.qbCustomerId,
                        rate: fields.rate === '' ? null : Number(fields.rate) });
-    toast('Saved');
-    renderCustList();
+    if (renaming) {
+      // Every key on screen has moved, including the open card's, so redraw from the
+      // server rather than patching the copy in memory.
+      cust.open = null;
+      toast('Saved — the route and the history were changed too');
+      loadCustomers();
+    } else {
+      toast('Saved');
+      renderCustList();
+    }
   } catch (e) {
-    el.querySelector('[data-err]').textContent = e.message;
+    err.textContent = e.message;
     btn.disabled = false; btn.textContent = 'Save';
   }
 }
