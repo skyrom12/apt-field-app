@@ -171,6 +171,8 @@
   .cu.inactive .cu-head{opacity:.55}
   .cu-body{border-top:1px solid var(--line);padding:12px}
   .cu-body .actions{margin-top:8px}
+  /* A note between two field groups needs a gap under it, not just over it. */
+  .cu-body .note + .f2{margin-top:12px}
   .cu-flag{font-size:.78rem;font-weight:700;padding:2px 8px;border-radius:99px;background:#fff3e0;color:var(--warn);border:1px solid #f3d9a4}
   .cu-orph{background:#fff3e0;border:1px solid #f3d9a4;border-radius:8px;padding:10px 12px;font-size:.9rem;margin-top:12px}
 </style>
@@ -850,6 +852,10 @@ function editVisit(visitId){
   // quantities beside it. From the first-edit snapshot once there is one, so it keeps
   // saying what was reported rather than what the office has since made of it.
   const reported = (wo.techOriginal && wo.techOriginal.chemicals) || v.chemicals || '';
+  // What was used first, then the rest in price-list order. Every item stays editable;
+  // the ones with a quantity just stop being something to hunt for in a scroller.
+  const usedFirst = (state.prices || []).slice().sort((a, b) =>
+    (chems[b.key] > 0 ? 1 : 0) - (chems[a.key] > 0 ? 1 : 0));
   const readings = wo.readings || {};
 
   box.innerHTML = `<div class="editor">
@@ -866,7 +872,7 @@ function editVisit(visitId){
       ? 'Technician reported: <b>' + esc(reported) + '</b>'
       : 'The technician listed no chemicals on this visit.'}</div>
     <div class="ehead"><span>Item</span><span>Qty</span><span>Price each</span></div>
-    <div class="echems">${(state.prices || []).map(p => `<div class="erow" data-key="${esc(p.key)}">
+    <div class="echems">${usedFirst.map(p => `<div class="erow" data-key="${esc(p.key)}">
       <span class="elabel">${esc(p.label)} <i>per ${esc(p.unit)}</i></span>
       <input class="eQty" inputmode="decimal" placeholder="0"
         value="${chems[p.key] == null ? '' : chems[p.key]}">
